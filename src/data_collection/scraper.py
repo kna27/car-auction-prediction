@@ -22,7 +22,7 @@ BASE_URL = "https://carsandbids.com"
 MODELS_TO_SCRAPE = [
     {"slug": "nd_miata", "path": "/search/mazda/nd-miata"},
     {"slug": "s2000", "path": "/search/honda/s2000"},
-    {"slug": "m4", "path": "/search/bmw/m4"}
+    {"slug": "m4", "path": "/search/bmw/m4"},
 ]
 
 HEADERS = {
@@ -72,7 +72,7 @@ def parse_search_page(html: str) -> List[Dict[str, str]]:
     return auctions
 
 
-def parse_auction_page(html: str) -> Dict[str, str]:
+def parse_auction_page(html: str, url: str) -> Dict[str, str]:
     """
     Parse an individual auction page and pull specs from the
     quick-facts dl/dt/dd blocks and count modifications.
@@ -105,9 +105,13 @@ def parse_auction_page(html: str) -> Dict[str, str]:
                 # Fallback to count line breaks or sentences if not a list, but usually it's a list.
                 pass
 
+    # Extract year from URL slug (e.g., .../2019-mazda-mx-5-miata-club)
+    year = url.split('/')[-1].split('-')[0] if url else ""
+
     return {
+        "year": year,
         "make": specs.get("Make", ""),
-        "model": specs.get("Model", ""),
+        "model": specs.get("Model", "").replace(" Save", ""),
         "mileage": specs.get("Mileage", ""),
         "title_status": specs.get("Title Status", ""),
         "location": specs.get("Location", ""),
@@ -174,30 +178,14 @@ def scrape_model(driver, search_path: str, max_pages: Optional[int] = None) -> L
                     print(f"    Warning: timed out waiting for cnb-details-quick-facts on {a['url']}")
                     
                 html = driver.page_source
-                details = parse_auction_page(html)
+                details = parse_auction_page(html, a['url'])
+                
+                row = {**a, **details}
+                all_rows.append(row)
 
             except Exception as e:
                 print(f"    Error fetching/parsing auction {a['url']}: {e}")
                 continue
-
-            row = {
-                "make": details["make"],
-                "model": details["model"],
-                "mileage": details["mileage"],
-                "title_status": details["title_status"],
-                "location": details["location"],
-                "engine": details["engine"],
-                "drivetrain": details["drivetrain"],
-                "transmission": details["transmission"],
-                "body_style": details["body_style"],
-                "exterior_color": details["exterior_color"],
-                "interior_color": details["interior_color"],
-                "num_modifications": details["num_modifications"],
-                "sale_price": a["sale_price"],
-                "date": a["date"],
-                "auction_link": a["url"],
-            }
-            all_rows.append(row)
 
         page += 1
 
@@ -205,7 +193,11 @@ def scrape_model(driver, search_path: str, max_pages: Optional[int] = None) -> L
 
 
 def write_csv(rows: List[Dict[str, str]], output_path: str) -> None:
+    if not rows:
+        return
+
     fieldnames = [
+        "year",
         "make",
         "model",
         "mileage",
@@ -220,7 +212,7 @@ def write_csv(rows: List[Dict[str, str]], output_path: str) -> None:
         "num_modifications",
         "sale_price",
         "date",
-        "auction_link",
+        "url",
     ]
 
     with open(output_path, "w", newline="", encoding="utf-8") as f:
@@ -250,7 +242,7 @@ def main() -> None:
     try:
         for model in MODELS_TO_SCRAPE:
             print(f"--- Scraping {model['slug']} ---")
-            rows = scrape_model(driver, model["path"], max_pages=1)
+            rows = scrape_model(driver, model["path"])
             
             output_file = os.path.join("data", "raw", f"{model['slug']}_raw.csv")
             write_csv(rows, output_file)
