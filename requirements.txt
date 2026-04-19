@@ -1,0 +1,12 @@
+requests
+beautifulsoup4
+selenium
+webdriver-manager
+pandas
+numpy
+SQLAlchemy
+psycopg2-binary
+scikit-learn
+matplotlib
+seaborn
+jupyter

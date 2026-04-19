@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+.Python
+build/
+pip-log.txt
+.ipynb_checkpoints
+.env
+.venv
+env/
+venv/
+
+# MacOS
+.DS_Store
+
+# Data
+data/
