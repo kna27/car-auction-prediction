@@ -13,10 +13,13 @@ def clean_mileage(mileage_str):
     digits = ''.join(filter(str.isdigit, str(mileage_str)))
     return int(digits) if digits else np.nan
 
-def clean_dataset(df: pd.DataFrame) -> pd.DataFrame:
+def clean_dataset(df: pd.DataFrame, drop_rebuilt=True) -> pd.DataFrame:
     # 0. Initial Filtering (Outliers / Rebuilt Titles)
     # Drop Rebuilt or Salvage titles as they skew prices
-    df = df[~df['title_status'].str.contains("Rebuilt|Salvage", case=False, na=False)].copy()
+    if drop_rebuilt:
+        df = df[~df['title_status'].str.contains("Rebuilt|Salvage", case=False, na=False)].copy()
+    else:
+        df = df.copy()
 
     # Clean the " Save" artifact from model name
     df['model'] = df['model'].str.replace(" Save", "", regex=False)

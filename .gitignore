@@ -3,14 +3,21 @@ __pycache__/
 .Python
 build/
 pip-log.txt
-.ipynb_checkpoints
+
+# Environment
 .env
 .venv
 env/
 venv/
 
-# MacOS
-.DS_Store
-
 # Data
 data/
+*.csv
+*.json
+
+# Models
+src/model/saved_models/
+*.joblib
+
+# MacOS
+.DS_Store
