@@ -1,0 +1,103 @@
+import os
+import sys
+import json
+import joblib
+import pandas as pd
+import numpy as np
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.by import By
+from selenium.common.exceptions import TimeoutException
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
+
+from src.data_collection.scraper import parse_auction_page
+from src.data_cleaning.clean_data import clean_dataset
+
+MODEL_DIR = os.path.join("src", "model", "saved_models")
+RESULTS_DIR = os.path.join("src", "model", "results")
+SUMMARY_FILE = os.path.join(RESULTS_DIR, "experiment_summary.json")
+
+def scrape_url(url: str) -> dict:
+    chrome_options = Options()
+    chrome_options.add_argument("--headless=new")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    
+    chrome_options.add_argument("user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    chrome_options.add_experimental_option("useAutomationExtension", False)
+
+    driver = webdriver.Chrome(options=chrome_options)
+    
+    try:
+        print(f"Scraping {url}...")
+        driver.get(url)
+        try:
+            WebDriverWait(driver, 20).until(
+                EC.presence_of_element_located(
+                    (By.CSS_SELECTOR, "div.cnb-details-quick-facts")
+                )
+            )
+        except TimeoutException:
+            print("Warning: Timed out waiting for auction details to load. Attempting to parse anyway...")
+            
+        html = driver.page_source
+        details = parse_auction_page(html, url)
+        return details
+    finally:
+        driver.quit()
+
+def predict_price(url: str):
+    details = scrape_url(url)
+    if not details or not details.get("make"):
+        print("Failed to scrape details or invalid auction page.")
+        return
+
+    print("\n--- Auction Details ---")
+    for k, v in details.items():
+        print(f"{k.capitalize()}: {v}")
+
+    # Convert to DataFrame
+    df_raw = pd.DataFrame([details])
+    df_raw['sale_price'] = np.nan # Mock target column so clean_dataset doesn't fail
+    
+    # Clean it without dropping rebuilt cars
+    df_clean = clean_dataset(df_raw, drop_rebuilt=False)
+    
+    model_name_extracted = df_clean.iloc[0]['model']
+    
+    model_path = os.path.join(MODEL_DIR, f"model_{model_name_extracted.replace(' ', '_')}.joblib")
+    if os.path.exists(model_path):
+        print(f"Found Model for '{model_name_extracted}'! Loading...")
+        model_to_use = joblib.load(model_path)
+    else:
+        print(f"Error: No Model found for '{model_name_extracted}'.")
+        print(f"Please train a model for this car by running `python src/model/train_model.py`")
+        return
+
+    # Prepare features to match the pipeline expectations
+    X = df_clean.drop(columns=['sale_price', 'url', 'date', 'location', 'make', 'model'], errors='ignore')
+    
+    try:
+        prediction = model_to_use.predict(X)[0]
+        print("\n=========================================")
+        print(f"💰 PREDICTED SALE PRICE: ${prediction:,.2f}")
+        print("=========================================")
+        
+        if df_clean.iloc[0]['title_status'] and "rebuilt" in str(df_clean.iloc[0]['title_status']).lower():
+            print("⚠️ NOTE: This car has a Rebuilt/Salvage title. The model was primarily trained on Clean titles, so this prediction may be an overestimate.")
+            
+    except Exception as e:
+        print(f"Error during prediction: {e}")
+        import traceback
+        traceback.print_exc()
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python src/model/predict_auction.py <auction_url>")
+    else:
+        predict_price(sys.argv[1])
