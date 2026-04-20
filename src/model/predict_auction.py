@@ -1,20 +1,20 @@
 import os
 import sys
-import json
-import joblib
-import pandas as pd
-import numpy as np
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
 
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.common.by import By
+import joblib
+import numpy as np
+import pandas as pd
+from selenium import webdriver
 from selenium.common.exceptions import TimeoutException
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
+
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from src.data_collection.scraper import parse_auction_page
 from src.data_cleaning.clean_data import clean_dataset
+from src.data_collection.scraper import parse_auction_page
 
 MODEL_DIR = os.path.join("src", "model", "saved_models")
 RESULTS_DIR = os.path.join("src", "model", "results")
@@ -80,7 +80,7 @@ def predict_price(url: str):
         return
 
     # Prepare features to match the pipeline expectations
-    X = df_clean.drop(columns=['sale_price', 'url', 'date', 'location', 'make', 'model'], errors='ignore')
+    X = df_clean.drop(columns=['sale_price', 'url', 'image_url', 'date', 'location', 'make', 'model'], errors='ignore')
     
     try:
         prediction = model_to_use.predict(X)[0]

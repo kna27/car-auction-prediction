@@ -2,6 +2,7 @@ import os
 import re
 
 import matplotlib
+
 matplotlib.use("Agg")  # required for FastAPI background threads (macOS)
 import matplotlib.pyplot as plt
 import pandas as pd

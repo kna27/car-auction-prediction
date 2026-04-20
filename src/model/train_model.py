@@ -1,19 +1,22 @@
-import os
-import pandas as pd
-import numpy as np
-from sqlalchemy import create_engine
-from sklearn.model_selection import train_test_split, RandomizedSearchCV
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, VotingRegressor
-from sklearn.linear_model import RidgeCV, LassoCV
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score, mean_absolute_percentage_error
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
-from sklearn.compose import ColumnTransformer, TransformedTargetRegressor
-from sklearn.pipeline import Pipeline
-from sklearn.impute import SimpleImputer
-import joblib
 import json
+import os
 from typing import List, Optional
+
+import joblib
+import numpy as np
+import pandas as pd
 from dotenv import load_dotenv
+from sklearn.compose import ColumnTransformer, TransformedTargetRegressor
+from sklearn.ensemble import (GradientBoostingRegressor, RandomForestRegressor,
+                              VotingRegressor)
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LassoCV, RidgeCV
+from sklearn.metrics import (mean_absolute_error,
+                             mean_absolute_percentage_error, r2_score)
+from sklearn.model_selection import RandomizedSearchCV, train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sqlalchemy import create_engine
 
 from src.eda.visualize import _model_slug
 
@@ -74,7 +77,7 @@ def build_pipeline(numeric_features, categorical_features):
         ('scaler', StandardScaler())
     ])
     
-    # 5% threshold filters out noise like rare colors/states perfectly for small datasets
+    # Small threshold filters out noise like rare colors/states for small datasets
     categorical_transformer = Pipeline(steps=[
         ('imputer', SimpleImputer(strategy='constant', fill_value='Unknown')),
         ('onehot', OneHotEncoder(handle_unknown='infrequent_if_exist', min_frequency=0.01))
@@ -165,10 +168,6 @@ def train_and_evaluate(only_models: Optional[List[str]] = None):
         
         car_test_df = df.loc[test_indices]
         car_test_df = car_test_df[car_test_df['model'] == car_model]
-        
-        if len(car_train_df) < 15 or len(car_test_df) == 0:
-            print(f"Not enough data ({len(car_train_df)} train rows). Skipping.")
-            continue
             
         X_train_car = car_train_df.drop(columns=['sale_price', 'make', 'model'])
         y_train_car = car_train_df['sale_price']
@@ -294,10 +293,9 @@ def train_and_evaluate(only_models: Optional[List[str]] = None):
         with open(summary_path, "w") as f:
             json.dump(results_summary, f, indent=4)
 
-        from src.eda.visualize import (
-            generate_all_visualizations as _gen_all,
-            plot_per_model_accuracy_lines as _gen_per_model,
-        )
+        from src.eda.visualize import generate_all_visualizations as _gen_all
+        from src.eda.visualize import \
+            plot_per_model_accuracy_lines as _gen_per_model
 
         # Always regenerate all visualizations to ensure the aggregate dashboard is up to date.
         _gen_all()

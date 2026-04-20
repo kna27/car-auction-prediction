@@ -1,28 +1,24 @@
 import copy
-import json
 import os
+import shutil
 import sys
 import traceback
 from typing import Any, Dict, Optional
 
 import pandas as pd
+import requests
 
 _ROOT = os.path.join(os.path.dirname(__file__), "..", "..")
 sys.path.insert(0, _ROOT)
 
-from src.data_cleaning.clean_data import clean_dataset, merge_into_all_vehicles_cleaned
-from src.data_collection.scraper import (
-    HEADERS,
-    ChromeDriverManager,
-    ChromeOptions,
-    ChromeService,
-    scrape_model,
-    webdriver,
-    write_csv,
-)
+from src.data_cleaning.clean_data import (clean_dataset,
+                                          merge_into_all_vehicles_cleaned)
+from src.data_collection.scraper import (HEADERS, ChromeDriverManager,
+                                         ChromeOptions, ChromeService,
+                                         scrape_model, webdriver, write_csv)
 from src.database.load_data import get_engine, load_data, setup_database
 from src.eda.visualize import _model_slug
-from src.model.train_model import RESULTS_DIR, train_and_evaluate
+from src.model.train_model import train_and_evaluate
 
 _TRAINING_STATE: Dict[str, Any] = {
     "status": "idle",
@@ -41,6 +37,21 @@ def get_training_state() -> Dict[str, Any]:
 
 def _set_state(**kwargs: Any) -> None:
     _TRAINING_STATE.update(kwargs)
+
+
+def download_image(url: str, output_path: str) -> bool:
+    """Download an image from a URL and save it to disk."""
+    if not url:
+        return False
+    try:
+        response = requests.get(url, stream=True, timeout=10, headers=HEADERS)
+        if response.status_code == 200:
+            with open(output_path, "wb") as f:
+                shutil.copyfileobj(response.raw, f)
+            return True
+    except Exception as e:
+        print(f"Failed to download image {url}: {e}")
+    return False
 
 
 def run_training_pipeline(search_path: str) -> None:
@@ -115,6 +126,29 @@ def run_training_pipeline(search_path: str) -> None:
         df_raw = pd.DataFrame(rows)
         df_clean = clean_dataset(df_raw, drop_rebuilt=True)
         merge_into_all_vehicles_cleaned(df_clean)
+
+        # Download representative images for each model
+        car_images_dir = os.path.join(_ROOT, "visualizations", "car_images")
+        os.makedirs(car_images_dir, exist_ok=True)
+
+        for model_name in df_clean["model"].dropna().unique():
+            model_slug = _model_slug(model_name)
+            img_path = os.path.join(car_images_dir, f"{model_slug}.jpg")
+            
+            # Only download if it doesn't exist yet to avoid unnecessary requests
+            if not os.path.exists(img_path):
+                # Find rows for this model that have an image_url
+                model_rows = df_raw[df_raw["model"].str.replace(" Save", "", regex=False) == model_name]
+                rows_with_images = model_rows[model_rows["image_url"].notna() & (model_rows["image_url"] != "")]
+                
+                if not rows_with_images.empty:
+                    # Pick a random row to get a more representative image (avoids bias from search sorting)
+                    selected_row = rows_with_images.sample(n=1).iloc[0]
+                    img_url = selected_row.get("image_url")
+                    
+                    if img_url:
+                        print(f"Downloading random image for {model_name}: {img_url}")
+                        download_image(img_url, img_path)
 
         _set_state(phase="loading_db", message="Loading new rows into database…")
         engine = get_engine()

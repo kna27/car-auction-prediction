@@ -1,7 +1,8 @@
-import os
 import glob
-import pandas as pd
+import os
+
 import numpy as np
+import pandas as pd
 
 RAW_DATA_DIR = os.path.join("data", "raw")
 PROCESSED_DATA_DIR = os.path.join("data", "processed")
@@ -54,6 +55,9 @@ def clean_dataset(df: pd.DataFrame, drop_rebuilt=True) -> pd.DataFrame:
             mode_val = df[col].mode()[0] if not df[col].mode().empty else "Unknown"
             df[col] = df[col].fillna(mode_val)
             df[col] = df[col].astype(str).str.strip()
+            
+    if 'image_url' in df.columns:
+        df['image_url'] = df['image_url'].astype(str).str.strip()
 
     # Apply specific casing fixes
     if 'transmission' in df.columns:

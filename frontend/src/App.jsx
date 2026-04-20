@@ -437,6 +437,9 @@ export default function App() {
                 >
                   Delete
                 </button>
+                {m.image_url && (
+                  <img src={m.image_url} alt={m.name} className="model-hero" />
+                )}
                 <h3>{m.name}</h3>
                 {m.metrics ? (
                   <div className="model-metrics">

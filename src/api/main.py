@@ -2,8 +2,8 @@ import json
 import os
 import re
 import sys
-from urllib.parse import urlparse
 from typing import Any, Dict, List
+from urllib.parse import urlparse
 
 import joblib
 import numpy as np
@@ -17,11 +17,12 @@ from sqlalchemy import text
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, _ROOT)
 
-from src.model.predict_auction import MODEL_DIR, RESULTS_DIR, scrape_url
 from src.data_cleaning.clean_data import clean_dataset
-from src.pipeline.training import get_training_state, run_full_retrain, run_training_pipeline
 from src.database.load_data import get_engine
 from src.eda.visualize import _model_slug, generate_all_visualizations
+from src.model.predict_auction import MODEL_DIR, RESULTS_DIR, scrape_url
+from src.pipeline.training import (get_training_state, run_full_retrain,
+                                   run_training_pipeline)
 
 VIS_DIR = os.path.join(_ROOT, "visualizations")
 PROCESSED_PATH = os.path.join(_ROOT, "data", "processed", "all_vehicles_cleaned.csv")
@@ -102,6 +103,11 @@ def get_models():
         mid = m["id"]
         mid_key = _normalize_model_key(mid)
         m["metrics"] = normalized_per_model.get(mid_key)
+        
+        # Add car image URL if it exists
+        img_file = f"car_images/{mid}.jpg"
+        if _viz_exists(img_file):
+            m["image_url"] = f"/visualizations/{img_file}"
 
     general_charts = [
         {"id": "accuracy_line", "title": "Actual vs predicted (all models)", "url": "/visualizations/accuracy_line_graph.png"},
@@ -179,6 +185,7 @@ def delete_model(model_id: str):
     _try_remove(os.path.join(RESULTS_DIR, f"feature_importances_{safe_id}.csv"))
     _try_remove(os.path.join(RESULTS_DIR, f"test_predictions_{safe_id}.csv"))
     _try_remove(os.path.join(VIS_DIR, f"accuracy_line_{safe_id}.png"))
+    _try_remove(os.path.join(VIS_DIR, "car_images", f"{safe_id}.jpg"))
 
     # Remove from DB so full retrain cannot re-create this model.
     deleted_auctions = 0
@@ -321,7 +328,7 @@ def predict_auction(req: PredictRequest):
 
     model_to_use = joblib.load(model_path)
     X = df_clean.drop(
-        columns=["sale_price", "url", "date", "location", "make", "model"],
+        columns=["sale_price", "url", "image_url", "date", "location", "make", "model"],
         errors="ignore",
     )
 
@@ -332,7 +339,7 @@ def predict_auction(req: PredictRequest):
         "details": details,
         "details_display": _format_prediction_details(details),
         "clean_features": df_clean.drop(
-            columns=["sale_price", "url", "date", "location", "make", "model"],
+            columns=["sale_price", "url", "image_url", "date", "location", "make", "model"],
             errors="ignore",
         ).to_dict(orient="records")[0],
     }
