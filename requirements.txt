@@ -11,3 +11,7 @@ matplotlib
 seaborn
 jupyter
 python-dotenv
+fastapi
+uvicorn
+pydantic
+python-multipart
