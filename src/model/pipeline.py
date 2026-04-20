@@ -11,14 +11,14 @@ import requests
 _ROOT = os.path.join(os.path.dirname(__file__), "..", "..")
 sys.path.insert(0, _ROOT)
 
-from src.data_cleaning.clean_data import (clean_dataset,
+from src.data.cleaner import (clean_dataset,
                                           merge_into_all_vehicles_cleaned)
-from src.data_collection.scraper import (HEADERS, ChromeDriverManager,
+from src.data.scraper import (HEADERS, ChromeDriverManager,
                                          ChromeOptions, ChromeService,
                                          scrape_model, webdriver, write_csv)
-from src.database.load_data import get_engine, load_data, setup_database
-from src.eda.visualize import _model_slug
-from src.model.train_model import train_and_evaluate
+from src.data.loader import get_engine, load_data, setup_database
+from src.model.visualizer import _model_slug
+from src.model.trainer import train_and_evaluate
 
 _TRAINING_STATE: Dict[str, Any] = {
     "status": "idle",
@@ -221,3 +221,8 @@ def run_full_retrain() -> None:
             error=str(e),
             message=str(e),
         )
+
+
+if __name__ == "__main__":
+    print("Starting full project retrain pipeline (DB -> Train -> Visualize)...")
+    run_full_retrain()

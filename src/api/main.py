@@ -19,11 +19,11 @@ from sqlalchemy import text
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, _ROOT)
 
-from src.data_cleaning.clean_data import clean_dataset
-from src.database.load_data import get_engine
-from src.eda.visualize import _model_slug, generate_all_visualizations
-from src.model.predict_auction import MODEL_DIR, RESULTS_DIR, scrape_url
-from src.pipeline.training import (get_training_state, run_full_retrain,
+from src.data.cleaner import clean_dataset
+from src.data.loader import get_engine
+from src.model.visualizer import _model_slug, generate_all_visualizations
+from src.model.predictor import MODEL_DIR, RESULTS_DIR, scrape_url
+from src.model.pipeline import (get_training_state, run_full_retrain,
                                    run_training_pipeline)
 
 VIS_DIR = os.path.join(_ROOT, "visualizations")

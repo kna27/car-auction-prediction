@@ -13,8 +13,8 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from src.data_cleaning.clean_data import clean_dataset
-from src.data_collection.scraper import parse_auction_page
+from src.data.cleaner import clean_dataset
+from src.data.scraper import parse_auction_page
 
 MODEL_DIR = os.path.join("src", "model", "saved_models")
 RESULTS_DIR = os.path.join("src", "model", "results")
@@ -76,7 +76,7 @@ def predict_price(url: str):
         model_to_use = joblib.load(model_path)
     else:
         print(f"Error: No Model found for '{model_name_extracted}'.")
-        print(f"Please train a model for this car by running `python src/model/train_model.py`")
+        print(f"Please train a model for this car by running `python src/model/trainer.py`")
         return
 
     # Prepare features to match the pipeline expectations
@@ -98,6 +98,6 @@ def predict_price(url: str):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python src/model/predict_auction.py <auction_url>")
+        print("Usage: python src/model/predictor.py <auction_url>")
     else:
         predict_price(sys.argv[1])

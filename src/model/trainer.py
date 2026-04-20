@@ -17,8 +17,10 @@ from sklearn.model_selection import RandomizedSearchCV, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sqlalchemy import create_engine
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from src.eda.visualize import _model_slug
+from src.model.visualizer import _model_slug
 
 load_dotenv()
 
@@ -80,7 +82,7 @@ def build_pipeline(numeric_features, categorical_features):
     # Small threshold filters out noise like rare colors/states for small datasets
     categorical_transformer = Pipeline(steps=[
         ('imputer', SimpleImputer(strategy='constant', fill_value='Unknown')),
-        ('onehot', OneHotEncoder(handle_unknown='infrequent_if_exist', min_frequency=0.01))
+        ('onehot', OneHotEncoder(handle_unknown='infrequent_if_exist', min_frequency=0.05))
     ])
     
     preprocessor = ColumnTransformer(
@@ -285,8 +287,8 @@ def train_and_evaluate(only_models: Optional[List[str]] = None):
         with open(summary_path, "w") as f:
             json.dump(results_summary, f, indent=4)
 
-        from src.eda.visualize import generate_all_visualizations as _gen_all
-        from src.eda.visualize import \
+        from src.model.visualizer import generate_all_visualizations as _gen_all
+        from src.model.visualizer import \
             plot_per_model_accuracy_lines as _gen_per_model
 
         # Always regenerate all visualizations to ensure the aggregate dashboard is up to date.
