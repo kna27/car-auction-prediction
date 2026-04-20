@@ -12,7 +12,10 @@ from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
 import joblib
 import json
+from typing import List, Optional
 from dotenv import load_dotenv
+
+from src.eda.visualize import _model_slug
 
 load_dotenv()
 
@@ -125,7 +128,7 @@ def extract_feature_importances(pipeline, numeric_features, categorical_features
     
     return df_imp
 
-def train_and_evaluate():
+def train_and_evaluate(only_models: Optional[List[str]] = None):
     print("Loading data from PostgreSQL database...")
     df = load_data_from_db()
     df = df.dropna(subset=['sale_price']).copy()
@@ -144,11 +147,17 @@ def train_and_evaluate():
     
     trained_models = {}
     test_results_list = []
+    per_model_metrics: dict = {}
     
     train_indices = X_train.index
     test_indices = X_test.index
     
-    for car_model in df['model'].unique():
+    candidate_models = list(df['model'].dropna().unique())
+    if only_models:
+        only = set(map(str, only_models))
+        candidate_models = [m for m in candidate_models if str(m) in only]
+
+    for car_model in candidate_models:
         print(f"\n--- Model: {car_model} ---")
         
         car_train_df = df.loc[train_indices]
@@ -205,14 +214,29 @@ def train_and_evaluate():
         print(f"Test MAE : ${mae:.2f}")
         print(f"Test MAPE: {mape:.2%}")
         print(f"Test R2  : {r2:.3f}")
-        
+
+        per_model_metrics[_model_slug(car_model)] = {
+            "MAE": float(mae),
+            "MAPE": float(mape),
+            "R2": float(r2),
+        }
+
         car_test_results = car_test_df.copy()
         car_test_results['Predicted'] = preds
         car_test_results['Actual'] = y_test_car
         test_results_list.append(car_test_results)
+
+        # Save per-model predictions (used to draw per-model charts on incremental runs)
+        car_test_results.to_csv(
+            os.path.join(RESULTS_DIR, f"test_predictions_{_model_slug(car_model)}.csv"),
+            index=False,
+        )
         
         feature_imp = extract_feature_importances(best_model, numeric_features, valid_cat_features)
-        feature_imp.to_csv(os.path.join(RESULTS_DIR, f"feature_importances_{car_model.replace(' ', '_')}.csv"), index=False)
+        feature_imp.to_csv(
+            os.path.join(RESULTS_DIR, f"feature_importances_{_model_slug(car_model)}.csv"),
+            index=False,
+        )
 
     print("\n=============================================")
     print("FINAL AGGREGATE PERFORMANCE")
@@ -228,16 +252,55 @@ def train_and_evaluate():
         print(f"Aggregate MAPE: {aggregate_mape:.2%}")
         print(f"Aggregate R2  : {aggregate_r2:.3f}")
         
-        test_results.to_csv(os.path.join(RESULTS_DIR, "test_predictions.csv"), index=False)
+        # Update the aggregate file (merge on incremental runs, overwrite on full runs).
+        agg_path = os.path.join(RESULTS_DIR, "test_predictions.csv")
+        if only_models and os.path.exists(agg_path):
+            try:
+                existing_agg = pd.read_csv(agg_path)
+                only_set = set(map(str, only_models))
+                # Remove existing rows for models we just trained to avoid duplicates
+                existing_agg = existing_agg[~existing_agg["model"].astype(str).isin(only_set)]
+                test_results = pd.concat([existing_agg, test_results], ignore_index=True)
+            except Exception as e:
+                print(f"Warning: Could not merge with existing aggregate results: {e}")
+
+        test_results.to_csv(agg_path, index=False)
         
-        # Save summary
-        results_summary = {
-            "MAE": float(aggregate_mae),
-            "R2": float(aggregate_r2),
-            "MAPE": float(aggregate_mape)
-        }
-        with open(os.path.join(RESULTS_DIR, "experiment_summary.json"), "w") as f:
+        # Save summary (merge per_model into existing on incremental runs)
+        summary_path = os.path.join(RESULTS_DIR, "experiment_summary.json")
+        existing = {}
+        if os.path.exists(summary_path):
+            with open(summary_path, "r") as f:
+                existing = json.load(f) or {}
+
+        merged_per_model = dict(existing.get("per_model") or {})
+        merged_per_model.update(per_model_metrics)
+
+        if only_models:
+            # Keep existing aggregate numbers on incremental runs (they won't reflect the full suite).
+            results_summary = {
+                "MAE": float(existing.get("MAE")) if existing.get("MAE") is not None else float(aggregate_mae),
+                "R2": float(existing.get("R2")) if existing.get("R2") is not None else float(aggregate_r2),
+                "MAPE": float(existing.get("MAPE")) if existing.get("MAPE") is not None else float(aggregate_mape),
+                "per_model": merged_per_model,
+            }
+        else:
+            results_summary = {
+                "MAE": float(aggregate_mae),
+                "R2": float(aggregate_r2),
+                "MAPE": float(aggregate_mape),
+                "per_model": merged_per_model,
+            }
+        with open(summary_path, "w") as f:
             json.dump(results_summary, f, indent=4)
+
+        from src.eda.visualize import (
+            generate_all_visualizations as _gen_all,
+            plot_per_model_accuracy_lines as _gen_per_model,
+        )
+
+        # Always regenerate all visualizations to ensure the aggregate dashboard is up to date.
+        _gen_all()
             
         # Clean up old local/global files if they exist
         old_files = ["best_global_rf.joblib", "global_feature_importances.csv", "test_predictions_global.csv", "test_predictions_local.csv"]

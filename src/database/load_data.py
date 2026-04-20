@@ -1,4 +1,6 @@
 import os
+from typing import Optional
+
 import pandas as pd
 from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
@@ -56,15 +58,35 @@ def get_or_create(conn, table, column, value, extra_cols=None, extra_vals=None):
         new_id = conn.execute(insert_query, params).fetchone()[0]
         return new_id
 
-def load_data(engine):
-    if not os.path.exists(PROCESSED_DATA_PATH):
-        print(f"Processed data file not found: {PROCESSED_DATA_PATH}")
+def get_existing_auction_urls(conn) -> set:
+    r = conn.execute(text("SELECT url FROM auctions WHERE url IS NOT NULL"))
+    return {row[0] for row in r.fetchall()}
+
+
+def load_data(engine, df: Optional[pd.DataFrame] = None):
+    if df is None:
+        if not os.path.exists(PROCESSED_DATA_PATH):
+            print(f"Processed data file not found: {PROCESSED_DATA_PATH}")
+            return
+        df = pd.read_csv(PROCESSED_DATA_PATH)
+
+    if df.empty:
+        print("No rows to load.")
         return
 
-    df = pd.read_csv(PROCESSED_DATA_PATH)
-    
     with engine.connect() as conn:
+        existing = get_existing_auction_urls(conn)
+        inserted = 0
+        skipped = 0
         for _, row in df.iterrows():
+            row_url = row['url'] if pd.notna(row.get('url')) else None
+            if not row_url:
+                skipped += 1
+                continue
+            if row_url in existing:
+                skipped += 1
+                continue
+
             # 1. Make
             make_id = get_or_create(conn, "makes", "name", row['make'])
             
@@ -81,7 +103,7 @@ def load_data(engine):
             # 5. Auction Insert
             # Handle potential NaN in date
             auction_date = row['date'] if pd.notna(row['date']) else None
-            
+
             auction_query = text("""
                 INSERT INTO auctions 
                 (year, model_id, transmission_id, exterior_color_id, interior_color_id, 
@@ -93,8 +115,8 @@ def load_data(engine):
                  :num_modifications, :sale_price, :auction_date, :has_forced_induction, :url)
                 ON CONFLICT (url) DO NOTHING
             """)
-            
-            conn.execute(auction_query, {
+
+            result = conn.execute(auction_query, {
                 "year": row['year'] if pd.notna(row.get('year')) else None,
                 "model_id": model_id,
                 "trans_id": trans_id,
@@ -111,11 +133,15 @@ def load_data(engine):
                 "sale_price": row['sale_price'] if pd.notna(row['sale_price']) else None,
                 "auction_date": auction_date,
                 "has_forced_induction": row.get('has_forced_induction', 0),
-                "url": row['url'] if pd.notna(row.get('url')) else None
+                "url": row_url
             })
-            
+            if result.rowcount:
+                inserted += 1
+                if row_url:
+                    existing.add(row_url)
+
         conn.commit()
-        print("Data loaded successfully.")
+        print(f"Data loaded: {inserted} new row(s), {skipped} already in database.")
 
 def main():
     engine = get_engine()

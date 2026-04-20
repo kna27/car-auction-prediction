@@ -5,6 +5,7 @@ import numpy as np
 
 RAW_DATA_DIR = os.path.join("data", "raw")
 PROCESSED_DATA_DIR = os.path.join("data", "processed")
+ALL_VEHICLES_CLEANED = os.path.join(PROCESSED_DATA_DIR, "all_vehicles_cleaned.csv")
 
 def clean_mileage(mileage_str):
     if pd.isna(mileage_str):
@@ -84,6 +85,21 @@ def clean_dataset(df: pd.DataFrame, drop_rebuilt=True) -> pd.DataFrame:
 
     return df
 
+
+def merge_into_all_vehicles_cleaned(df_new: pd.DataFrame) -> pd.DataFrame:
+    """Append new cleaned rows to the master CSV, deduplicated by auction url."""
+    os.makedirs(PROCESSED_DATA_DIR, exist_ok=True)
+    if os.path.exists(ALL_VEHICLES_CLEANED):
+        df_existing = pd.read_csv(ALL_VEHICLES_CLEANED)
+        combined = pd.concat([df_existing, df_new], ignore_index=True)
+    else:
+        combined = df_new
+    if "url" in combined.columns:
+        combined = combined.drop_duplicates(subset=["url"], keep="last")
+    combined.to_csv(ALL_VEHICLES_CLEANED, index=False)
+    return combined
+
+
 def main():
     os.makedirs(PROCESSED_DATA_DIR, exist_ok=True)
     raw_files = glob.glob(os.path.join(RAW_DATA_DIR, "*_raw.csv"))
@@ -109,9 +125,8 @@ def main():
     # Combine into one master dataset
     if all_data:
         master_df = pd.concat(all_data, ignore_index=True)
-        master_out = os.path.join(PROCESSED_DATA_DIR, "all_vehicles_cleaned.csv")
-        master_df.to_csv(master_out, index=False)
-        print(f"Saved combined dataset to {master_out}")
+        master_df.to_csv(ALL_VEHICLES_CLEANED, index=False)
+        print(f"Saved combined dataset to {ALL_VEHICLES_CLEANED}")
 
 if __name__ == "__main__":
     main()

@@ -2,7 +2,7 @@ import csv
 import os
 import re
 import time
-from typing import Dict, List, Optional, Set
+from typing import Callable, Dict, List, Optional, Set
 from urllib.parse import urljoin
 
 import requests
@@ -109,6 +109,15 @@ def parse_auction_page(html: str, url: str) -> Dict[str, str]:
     # Extract year from URL slug (e.g., .../2019-mazda-mx-5-miata-club)
     year = url.split('/')[-1].split('-')[0] if url else ""
 
+    image_url = ""
+    og = soup.select_one('meta[property="og:image"]')
+    if og and og.get("content"):
+        image_url = str(og["content"]).strip()
+    if not image_url:
+        hero = soup.select_one(".auction-title-container img, .gallery img, img.auction-hero")
+        if hero and hero.get("src"):
+            image_url = urljoin(BASE_URL, hero["src"].split("?", 1)[0])
+
     return {
         "year": year,
         "make": specs.get("Make", ""),
@@ -123,11 +132,22 @@ def parse_auction_page(html: str, url: str) -> Dict[str, str]:
         "exterior_color": specs.get("Exterior Color", ""),
         "interior_color": specs.get("Interior Color", ""),
         "num_modifications": str(num_modifications),
+        "url": url,
+        "image_url": image_url,
     }
 
 
-def scrape_model(driver, search_path: str, max_pages: Optional[int] = None) -> List[Dict[str, str]]:
-    all_rows: List[Dict[str, str]] = []
+def scrape_model(
+    driver,
+    search_path: str,
+    max_pages: Optional[int] = None,
+    progress_callback: Optional[Callable[[Dict[str, object]], None]] = None,
+) -> List[Dict[str, str]]:
+    """
+    Two phases: (1) paginate search and collect auction URLs + sale metadata,
+    (2) visit each auction page for full details. Enables accurate x/y progress.
+    """
+    auction_queue: List[Dict[str, str]] = []
     seen_urls: Set[str] = set()
 
     page = 1
@@ -140,6 +160,9 @@ def scrape_model(driver, search_path: str, max_pages: Optional[int] = None) -> L
             search_url = f"{search_url}?page={page}"
 
         print(f"Fetching search page {page}: {search_url}")
+        if progress_callback:
+            progress_callback({"phase": "listing", "page": page, "discovered": len(auction_queue)})
+
         driver.get(search_url)
 
         try:
@@ -151,7 +174,6 @@ def scrape_model(driver, search_path: str, max_pages: Optional[int] = None) -> L
                     )
                 )
             )
-            # Scroll to trigger lazy loading and wait for prices to populate asynchronously
             driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
             time.sleep(3)
         except TimeoutException:
@@ -160,38 +182,50 @@ def scrape_model(driver, search_path: str, max_pages: Optional[int] = None) -> L
 
         html = driver.page_source
         page_auctions = parse_search_page(html)
-        page_auctions = [a for a in page_auctions if a["url"] not in seen_urls]
+        new_items = [a for a in page_auctions if a["url"] not in seen_urls]
 
-        if not page_auctions:
+        if not new_items:
             break
 
-        for a in page_auctions:
+        for a in new_items:
             seen_urls.add(a["url"])
-            print(f"  Fetching auction: {a['url']}")
-
-            try:
-                time.sleep(3) # Wait between requests to avoid rate limits
-                driver.get(a["url"])
-                try:
-                    WebDriverWait(driver, 20).until(
-                        EC.presence_of_element_located(
-                            (By.CSS_SELECTOR, "div.cnb-details-quick-facts")
-                        )
-                    )
-                except TimeoutException:
-                    print(f"    Warning: timed out waiting for cnb-details-quick-facts on {a['url']}")
-                    
-                html = driver.page_source
-                details = parse_auction_page(html, a['url'])
-                
-                row = {**a, **details}
-                all_rows.append(row)
-
-            except Exception as e:
-                print(f"    Error fetching/parsing auction {a['url']}: {e}")
-                continue
+            auction_queue.append(a)
 
         page += 1
+
+    total = len(auction_queue)
+    if progress_callback:
+        progress_callback({"phase": "fetching", "fetched": 0, "total": total})
+
+    all_rows: List[Dict[str, str]] = []
+    for idx, meta in enumerate(auction_queue):
+        print(f"  Fetching auction ({idx + 1}/{total}): {meta['url']}")
+        if progress_callback:
+            progress_callback({"phase": "fetching", "fetched": idx, "total": total})
+
+        try:
+            time.sleep(3)
+            driver.get(meta["url"])
+            try:
+                WebDriverWait(driver, 20).until(
+                    EC.presence_of_element_located(
+                        (By.CSS_SELECTOR, "div.cnb-details-quick-facts")
+                    )
+                )
+            except TimeoutException:
+                print(f"    Warning: timed out waiting for cnb-details-quick-facts on {meta['url']}")
+
+            html = driver.page_source
+            details = parse_auction_page(html, meta["url"])
+            row = {**meta, **details}
+            all_rows.append(row)
+
+        except Exception as e:
+            print(f"    Error fetching/parsing auction {meta['url']}: {e}")
+            continue
+
+        if progress_callback:
+            progress_callback({"phase": "fetching", "fetched": idx + 1, "total": total})
 
     return all_rows
 
@@ -217,10 +251,11 @@ def write_csv(rows: List[Dict[str, str]], output_path: str) -> None:
         "sale_price",
         "date",
         "url",
+        "image_url",
     ]
 
     with open(output_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         for row in rows:
             writer.writerow(row)
