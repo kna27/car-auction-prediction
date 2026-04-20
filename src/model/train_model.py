@@ -243,14 +243,6 @@ def train_and_evaluate(only_models: Optional[List[str]] = None):
     
     if test_results_list:
         test_results = pd.concat(test_results_list)
-        aggregate_mae = mean_absolute_error(test_results['Actual'], test_results['Predicted'])
-        aggregate_r2 = r2_score(test_results['Actual'], test_results['Predicted'])
-        aggregate_mape = mean_absolute_percentage_error(test_results['Actual'], test_results['Predicted'])
-        
-        print(f"Aggregate MAE : ${aggregate_mae:.2f}")
-        print(f"Aggregate MAPE: {aggregate_mape:.2%}")
-        print(f"Aggregate R2  : {aggregate_r2:.3f}")
-        
         # Update the aggregate file (merge on incremental runs, overwrite on full runs).
         agg_path = os.path.join(RESULTS_DIR, "test_predictions.csv")
         if only_models and os.path.exists(agg_path):
@@ -264,6 +256,15 @@ def train_and_evaluate(only_models: Optional[List[str]] = None):
                 print(f"Warning: Could not merge with existing aggregate results: {e}")
 
         test_results.to_csv(agg_path, index=False)
+
+        # Recalculate aggregate performance across ALL models now in the CSV
+        aggregate_mae = mean_absolute_error(test_results['Actual'], test_results['Predicted'])
+        aggregate_r2 = r2_score(test_results['Actual'], test_results['Predicted'])
+        aggregate_mape = mean_absolute_percentage_error(test_results['Actual'], test_results['Predicted'])
+        
+        print(f"Aggregate MAE : ${aggregate_mae:.2f}")
+        print(f"Aggregate MAPE: {aggregate_mape:.2%}")
+        print(f"Aggregate R2  : {aggregate_r2:.3f}")
         
         # Save summary (merge per_model into existing on incremental runs)
         summary_path = os.path.join(RESULTS_DIR, "experiment_summary.json")
@@ -275,21 +276,12 @@ def train_and_evaluate(only_models: Optional[List[str]] = None):
         merged_per_model = dict(existing.get("per_model") or {})
         merged_per_model.update(per_model_metrics)
 
-        if only_models:
-            # Keep existing aggregate numbers on incremental runs (they won't reflect the full suite).
-            results_summary = {
-                "MAE": float(existing.get("MAE")) if existing.get("MAE") is not None else float(aggregate_mae),
-                "R2": float(existing.get("R2")) if existing.get("R2") is not None else float(aggregate_r2),
-                "MAPE": float(existing.get("MAPE")) if existing.get("MAPE") is not None else float(aggregate_mape),
-                "per_model": merged_per_model,
-            }
-        else:
-            results_summary = {
-                "MAE": float(aggregate_mae),
-                "R2": float(aggregate_r2),
-                "MAPE": float(aggregate_mape),
-                "per_model": merged_per_model,
-            }
+        results_summary = {
+            "MAE": float(aggregate_mae),
+            "R2": float(aggregate_r2),
+            "MAPE": float(aggregate_mape),
+            "per_model": merged_per_model,
+        }
         with open(summary_path, "w") as f:
             json.dump(results_summary, f, indent=4)
 

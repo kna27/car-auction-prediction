@@ -9,6 +9,8 @@ import joblib
 import numpy as np
 import pandas as pd
 from fastapi import BackgroundTasks, FastAPI, HTTPException
+from sklearn.metrics import (mean_absolute_error,
+                             mean_absolute_percentage_error, r2_score)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -256,6 +258,34 @@ def delete_model(model_id: str):
                 df_agg_filtered = df_agg[keep_agg].copy()
                 if len(df_agg_filtered) != len(df_agg):
                     df_agg_filtered.to_csv(agg_path, index=False)
+                    
+                    # Recalculate aggregate metrics for the remaining models
+                    summary_path = os.path.join(RESULTS_DIR, "experiment_summary.json")
+                    if os.path.exists(summary_path):
+                        summary = _load_json(summary_path)
+                        
+                        if not df_agg_filtered.empty:
+                            summary["MAE"] = float(mean_absolute_error(df_agg_filtered['Actual'], df_agg_filtered['Predicted']))
+                            summary["MAPE"] = float(mean_absolute_percentage_error(df_agg_filtered['Actual'], df_agg_filtered['Predicted']))
+                            summary["R2"] = float(r2_score(df_agg_filtered['Actual'], df_agg_filtered['Predicted']))
+                        else:
+                            summary["MAE"] = None
+                            summary["MAPE"] = None
+                            summary["R2"] = None
+                            
+                        # Update the per_model keys again just to be sure we are in sync
+                        pm = dict(summary.get("per_model") or {})
+                        removed_keys = []
+                        for k in list(pm.keys()):
+                            if _normalize_model_key(k) == safe_key:
+                                removed_keys.append(k)
+                        for k in removed_keys:
+                            pm.pop(k, None)
+                        summary["per_model"] = pm
+
+                        with open(summary_path, "w", encoding="utf-8") as f:
+                            json.dump(summary, f, indent=4)
+
                     # Sync visualizations immediately so the deleted model disappears from charts
                     generate_all_visualizations()
         except Exception:
