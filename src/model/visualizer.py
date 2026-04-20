@@ -22,6 +22,26 @@ def _model_slug(name: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_\-]", "", s)
 
 
+def _get_model_colors():
+    """Returns a dictionary mapping model names to consistent colors."""
+    pred_path = os.path.join(RESULTS_DIR, "test_predictions.csv")
+    if not os.path.exists(pred_path):
+        return {}
+    
+    df = pd.read_csv(pred_path)
+    if "model" not in df.columns:
+        return {}
+        
+    models = sorted(df["model"].dropna().unique())
+    # Use Set2 for up to 8 colors, then fallback to husl for more
+    if len(models) <= 8:
+        palette = sns.color_palette("Set2", n_colors=len(models))
+    else:
+        palette = sns.color_palette("husl", n_colors=len(models))
+    
+    return dict(zip(models, palette))
+
+
 def plot_accuracy_line_graph():
     pred_path = os.path.join(RESULTS_DIR, "test_predictions.csv")
     if not os.path.exists(pred_path):
@@ -43,7 +63,7 @@ def plot_accuracy_line_graph():
         x=df_sorted.index,
         y=df_sorted["Predicted"],
         hue=df_sorted["model"],
-        palette="Set2",
+        palette=_get_model_colors(),
         s=60,
         alpha=0.9,
         zorder=2,
@@ -81,7 +101,7 @@ def plot_aggregate_actual_vs_predicted():
         data=df,
         s=80,
         alpha=0.85,
-        palette="Set2",
+        palette=_get_model_colors(),
     )
 
     min_val = min(df["Actual"].min(), df["Predicted"].min())
@@ -122,7 +142,7 @@ def plot_aggregate_residuals():
         data=df,
         s=80,
         alpha=0.85,
-        palette="Set2",
+        palette=_get_model_colors(),
     )
     plt.axhline(0, color="white", linestyle="--", alpha=0.5)
 
@@ -151,7 +171,7 @@ def plot_price_distribution_by_model():
 
     plt.figure(figsize=(12, 6))
     order = sorted(df["model"].dropna().unique(), key=str)
-    sns.boxplot(data=df, x="model", y="Actual", order=order, palette="Set2", hue="model", legend=False)
+    sns.boxplot(data=df, x="model", y="Actual", order=order, palette=_get_model_colors(), hue="model", legend=False)
     plt.xticks(rotation=25, ha="right")
     plt.title("Test-Set Actual Sale Prices by Model", fontsize=16)
     plt.xlabel("Model", fontsize=12)
@@ -203,11 +223,16 @@ def plot_model_accuracy_line(model_slug: str) -> None:
         linewidth=2,
         zorder=1,
     )
+    # Determine model color from global mapping
+    model_name = df_sorted["model"].iloc[0] if "model" in df_sorted.columns else None
+    model_colors = _get_model_colors()
+    pred_color = model_colors.get(model_name, "#38bdf8")
+
     plt.scatter(
         df_sorted.index,
         df_sorted["Predicted"],
         label="Predicted",
-        c="#38bdf8",
+        c=[pred_color],
         s=55,
         alpha=0.9,
         zorder=2,

@@ -63,6 +63,43 @@ function isValidCnbAuctionUrl(value) {
   }
 }
 
+const CAT_COLS = [
+  'title_status',
+  'state',
+  'engine',
+  'drivetrain',
+  'transmission',
+  'body_style',
+  'exterior_color',
+  'interior_color',
+]
+
+function formatFeatureName(name) {
+  if (!name) return ''
+  let s = name.replace('cat__', '').replace('num__', '')
+
+  // Categorical feature formatting
+  for (const col of CAT_COLS) {
+    if (s.startsWith(col + '_')) {
+      const val = s.slice(col.length + 1)
+      const cleanCol = col
+        .replace(/_/g, ' ')
+        .split(' ')
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(' ')
+      const cleanVal = val === 'infrequent_sklearn' ? '(Other)' : val
+      return `${cleanCol}: ${cleanVal}`
+    }
+  }
+
+  // Default formatting for numerical or other features
+  return s
+    .replace(/_/g, ' ')
+    .split(' ')
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ')
+}
+
 export default function App() {
   const [models, setModels] = useState([])
   const [summary, setSummary] = useState(null)
@@ -556,9 +593,9 @@ export default function App() {
                 {modelDetails.importances.map((imp, idx) => {
                   const maxImp = modelDetails.importances[0].Importance
                   const pctBar = maxImp > 0 ? (imp.Importance / maxImp) * 100 : 0
-                  const label = imp.Feature.replace('cat__', '').replace('num__', '')
+                  const label = formatFeatureName(imp.Feature)
                   return (
-                    <div className="feature-bar" key={`${label}-${idx}`}>
+                    <div className="feature-bar" key={`${imp.Feature}-${idx}`}>
                       <div className="feature-name" title={label}>
                         {label}
                       </div>
