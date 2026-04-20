@@ -20,9 +20,10 @@ from webdriver_manager.chrome import ChromeDriverManager
 BASE_URL = "https://carsandbids.com"
 
 MODELS_TO_SCRAPE = [
-    {"slug": "nd_miata", "path": "/search/mazda/nd-miata"},
+    {"slug": "nd-miata", "path": "/search/mazda/nd-miata"},
     {"slug": "s2000", "path": "/search/honda/s2000"},
-    {"slug": "m4", "path": "/search/bmw/m4"},
+    {"slug": "f8x-m4", "path": "/search/bmw/f8x-m4"},
+    {"slug": "e46-m3", "path": "/search/bmw/e46-m3"},
 ]
 
 HEADERS = {
@@ -150,6 +151,9 @@ def scrape_model(driver, search_path: str, max_pages: Optional[int] = None) -> L
                     )
                 )
             )
+            # Scroll to trigger lazy loading and wait for prices to populate asynchronously
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(3)
         except TimeoutException:
             print("  Timed out waiting for past auction results; stopping.")
             break
