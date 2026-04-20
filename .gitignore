@@ -13,11 +13,14 @@ venv/
 # Data
 data/
 *.csv
-*.json
 
 # Models
 src/model/saved_models/
 *.joblib
+
+# Results
+src/model/results/
+visualizations/
 
 # MacOS
 .DS_Store
