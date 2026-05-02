@@ -11,7 +11,7 @@ env/
 venv/
 
 # Data
-data/
+/data/
 *.csv
 
 # Models
