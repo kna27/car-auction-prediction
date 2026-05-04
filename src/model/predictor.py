@@ -15,12 +15,17 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from src.data.cleaner import clean_dataset
 from src.data.scraper import parse_auction_page
+from src.model.trainer import engineer_features
 
 MODEL_DIR = os.path.join("src", "model", "saved_models")
 RESULTS_DIR = os.path.join("src", "model", "results")
 SUMMARY_FILE = os.path.join(RESULTS_DIR, "experiment_summary.json")
 
 def scrape_url(url: str) -> dict:
+    """
+    Scrapes an individual auction URL using headless Selenium.
+    Returns a dictionary of raw car features.
+    """
     chrome_options = Options()
     chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
@@ -52,6 +57,10 @@ def scrape_url(url: str) -> dict:
         driver.quit()
 
 def predict_price(url: str):
+    """
+    Predicts the final sale price of a specific live auction URL.
+    Uses the trained model corresponding to the car's model type.
+    """
     details = scrape_url(url)
     if not details or not details.get("make"):
         print("Failed to scrape details or invalid auction page.")
@@ -67,6 +76,7 @@ def predict_price(url: str):
     
     # Clean it without dropping rebuilt cars
     df_clean = clean_dataset(df_raw, drop_rebuilt=False)
+    df_clean = engineer_features(df_clean)
     
     model_name_extracted = df_clean.iloc[0]['model']
     
@@ -80,7 +90,7 @@ def predict_price(url: str):
         return
 
     # Prepare features to match the pipeline expectations
-    X = df_clean.drop(columns=['sale_price', 'url', 'image_url', 'date', 'location', 'make', 'model'], errors='ignore')
+    X = df_clean.drop(columns=['sale_price', 'url', 'image_url', 'date', 'make', 'model'], errors='ignore')
     
     try:
         prediction = model_to_use.predict(X)[0]

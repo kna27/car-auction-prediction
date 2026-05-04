@@ -5,7 +5,6 @@ import time
 from typing import Callable, Dict, List, Optional, Set
 from urllib.parse import urljoin
 
-import requests
 from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException

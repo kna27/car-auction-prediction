@@ -9,6 +9,9 @@ PROCESSED_DATA_DIR = os.path.join("data", "processed")
 ALL_VEHICLES_CLEANED = os.path.join(PROCESSED_DATA_DIR, "all_vehicles_cleaned.csv")
 
 def clean_mileage(mileage_str):
+    """
+    Extracts numerical digits from a raw mileage string (e.g., '54,000 miles' -> 54000).
+    """
     if pd.isna(mileage_str):
         return np.nan
     # Extract only digits
@@ -16,6 +19,10 @@ def clean_mileage(mileage_str):
     return int(digits) if digits else np.nan
 
 def clean_dataset(df: pd.DataFrame, drop_rebuilt=True) -> pd.DataFrame:
+    """
+    Cleans raw auction dataset by parsing dates, imputing missing values, 
+    and extracting features like forced induction.
+    """
     # 0. Initial Filtering (Outliers / Rebuilt Titles)
     # Drop Rebuilt or Salvage titles as they skew prices
     if drop_rebuilt:
@@ -59,17 +66,22 @@ def clean_dataset(df: pd.DataFrame, drop_rebuilt=True) -> pd.DataFrame:
     if 'image_url' in df.columns:
         df['image_url'] = df['image_url'].astype(str).str.strip()
 
-    # Apply specific casing fixes
+    # Apply specific casing and spacing fixes
     if 'transmission' in df.columns:
         df['transmission'] = df['transmission'].str.title()
+        df['transmission'] = df['transmission'].str.replace(" )", ")", regex=False)
+        df['transmission'] = df['transmission'].str.replace(" Manual)", ")", regex=False)
 
     # 4b. Feature Engineering: Forced Induction
     if 'engine' in df.columns:
-        df['has_forced_induction'] = df['engine'].str.contains("Supercharged|Turbocharged", case=False).astype(int)
-        # Normalize engine name
-        df['engine'] = df['engine'].str.replace("Supercharged ", "", case=False, regex=False)
-        df['engine'] = df['engine'].str.replace("Turbocharged ", "", case=False, regex=False)
+        df['has_forced_induction'] = df['engine'].str.contains("Supercharged|Turbocharged|Twin Turbo|Turbo", case=False).astype(int)
+        # Normalize engine name while keeping forced induction details for specific trim categorization
         df['engine'] = df['engine'].str.replace("I-4", "I4", regex=False)
+        df['engine'] = df['engine'].str.replace("Inline-4", "I4", regex=False)
+        df['engine'] = df['engine'].str.replace(" Flat ", " Flat-", regex=False)
+        df['engine'] = df['engine'].str.replace(" H6", " Flat-6", regex=False)
+        df['engine'] = df['engine'].str.replace("Flat-Six", "Flat-6", case=False, regex=False)
+        df['engine'] = df['engine'].str.replace(r"(\d\.\d) Flat-6", r"\1L Flat-6", regex=True)
 
     # 4c. Clean Title Status (remove state info)
     if 'title_status' in df.columns:
@@ -105,6 +117,10 @@ def merge_into_all_vehicles_cleaned(df_new: pd.DataFrame) -> pd.DataFrame:
 
 
 def main():
+    """
+    Iterates through all raw CSV files, applies dataset cleaning, and combines them into 
+    the master `all_vehicles_cleaned.csv` file for training.
+    """
     os.makedirs(PROCESSED_DATA_DIR, exist_ok=True)
     raw_files = glob.glob(os.path.join(RAW_DATA_DIR, "*_raw.csv"))
     

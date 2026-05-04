@@ -1,3 +1,4 @@
+import glob
 import json
 import os
 import re
@@ -25,6 +26,7 @@ from src.model.visualizer import _model_slug, generate_all_visualizations
 from src.model.predictor import MODEL_DIR, RESULTS_DIR, scrape_url
 from src.model.pipeline import (get_training_state, run_full_retrain,
                                    run_training_pipeline)
+from src.model.trainer import engineer_features
 
 VIS_DIR = os.path.join(_ROOT, "visualizations")
 PROCESSED_PATH = os.path.join(_ROOT, "data", "processed", "all_vehicles_cleaned.csv")
@@ -188,49 +190,42 @@ def delete_model(model_id: str):
     _try_remove(os.path.join(RESULTS_DIR, f"test_predictions_{safe_id}.csv"))
     _try_remove(os.path.join(VIS_DIR, f"accuracy_line_{safe_id}.png"))
     _try_remove(os.path.join(VIS_DIR, "car_images", f"{safe_id}.jpg"))
+    _try_remove(os.path.join(_ROOT, "data", "raw", f"{safe_id}_raw.csv"))
+    _try_remove(os.path.join(_ROOT, "data", "processed", f"{safe_id}_cleaned.csv"))
 
-    # Remove from DB so full retrain cannot re-create this model.
     deleted_auctions = 0
     deleted_models = 0
+
+    # Delete from PostgreSQL database to ensure a full retrain doesn't bring the model back
     try:
         engine = get_engine()
-        with engine.begin() as conn:
-            rows = conn.execute(
-                text(
-                    """
-                    SELECT id
-                    FROM models
-                    WHERE lower(replace(name, ' ', '_')) = :k
-                    """
-                ),
-                {"k": safe_key},
-            ).fetchall()
-            model_ids = [r[0] for r in rows]
-            if model_ids:
-                for mid in model_ids:
-                    deleted_auctions += conn.execute(
-                        text("DELETE FROM auctions WHERE model_id = :mid"),
-                        {"mid": mid},
-                    ).rowcount or 0
-                    deleted_models += conn.execute(
-                        text("DELETE FROM models WHERE id = :mid"),
-                        {"mid": mid},
-                    ).rowcount or 0
-    except Exception:
-        # Keep endpoint resilient even if DB is unavailable.
-        pass
+        with engine.connect() as conn:
+            # We match model by replacing spaces with underscores for safe_key matching
+            # So let's find the model_id whose normalized name matches safe_key
+            r = conn.execute(text("SELECT id, name FROM models")).fetchall()
+            for row in r:
+                model_db_id = row[0]
+                model_db_name = row[1]
+                if _normalize_model_key(_model_slug(model_db_name)) == safe_key or _normalize_model_key(model_db_name) == safe_key:
+                    res = conn.execute(text("DELETE FROM auctions WHERE model_id = :mid"), {"mid": model_db_id})
+                    deleted_auctions += res.rowcount
+                    conn.execute(text("DELETE FROM models WHERE id = :mid"), {"mid": model_db_id})
+                    deleted_models += 1
+            conn.commit()
+    except Exception as e:
+        print(f"Warning: Could not delete from database. Continuing with CSV deletion. Error: {e}")
 
-    # Remove model rows from processed dataset so local data aligns with DB deletion.
+    # Delete from all_vehicles_cleaned.csv to preserve data consistency
     if os.path.exists(PROCESSED_PATH):
         try:
-            df = pd.read_csv(PROCESSED_PATH)
-            if "model" in df.columns:
-                keep = df["model"].apply(lambda x: _normalize_model_key(_model_slug(x)) != safe_key)
-                df_filtered = df[keep].copy()
-                if len(df_filtered) != len(df):
+            df_all = pd.read_csv(PROCESSED_PATH)
+            if "model" in df_all.columns:
+                keep_mask = df_all["model"].apply(lambda x: _normalize_model_key(_model_slug(x)) != safe_key and _normalize_model_key(x) != safe_key)
+                df_filtered = df_all[keep_mask]
+                if len(df_filtered) != len(df_all):
                     df_filtered.to_csv(PROCESSED_PATH, index=False)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Warning: Could not update all_vehicles_cleaned.csv. Error: {e}")
 
     # Remove from summary per_model
     summary_path = os.path.join(RESULTS_DIR, "experiment_summary.json")
@@ -344,6 +339,7 @@ def predict_auction(req: PredictRequest):
     df_raw = pd.DataFrame([details])
     df_raw["sale_price"] = np.nan
     df_clean = clean_dataset(df_raw, drop_rebuilt=False)
+    df_clean = engineer_features(df_clean)
 
     model_name_extracted = df_clean.iloc[0]["model"]
     model_path = os.path.join(
@@ -358,7 +354,7 @@ def predict_auction(req: PredictRequest):
 
     model_to_use = joblib.load(model_path)
     X = df_clean.drop(
-        columns=["sale_price", "url", "image_url", "date", "location", "make", "model"],
+        columns=["sale_price", "url", "image_url", "date", "make", "model"],
         errors="ignore",
     )
 
@@ -369,7 +365,7 @@ def predict_auction(req: PredictRequest):
         "details": details,
         "details_display": _format_prediction_details(details),
         "clean_features": df_clean.drop(
-            columns=["sale_price", "url", "image_url", "date", "location", "make", "model"],
+            columns=["sale_price", "url", "image_url", "date", "make", "model"],
             errors="ignore",
         ).to_dict(orient="records")[0],
     }

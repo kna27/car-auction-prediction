@@ -7,15 +7,14 @@ import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
 from sklearn.compose import ColumnTransformer, TransformedTargetRegressor
-from sklearn.ensemble import (GradientBoostingRegressor, RandomForestRegressor,
-                              VotingRegressor)
+from sklearn.ensemble import GradientBoostingRegressor, StackingRegressor
 from sklearn.impute import SimpleImputer
-from sklearn.linear_model import LassoCV, RidgeCV
+from sklearn.linear_model import RidgeCV, BayesianRidge
 from sklearn.metrics import (mean_absolute_error,
                              mean_absolute_percentage_error, r2_score)
-from sklearn.model_selection import RandomizedSearchCV, train_test_split
+from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.preprocessing import OneHotEncoder, StandardScaler, SplineTransformer, TargetEncoder
 from sqlalchemy import create_engine
 import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -45,66 +44,96 @@ def get_engine():
     return create_engine(connection_string)
 
 def load_data_from_db():
-    engine = get_engine()
-    query = """
-        SELECT 
-            a.year,
-            a.mileage,
-            a.title_status,
-            a.state,
-            a.engine,
-            a.drivetrain,
-            a.body_style,
-            a.num_modifications,
-            a.has_forced_induction,
-            a.sale_price,
-            mk.name as make,
-            md.name as model,
-            t.name as transmission,
-            ec.name as exterior_color,
-            ic.name as interior_color
-        FROM auctions a
-        LEFT JOIN models md ON a.model_id = md.id
-        LEFT JOIN makes mk ON md.make_id = mk.id
-        LEFT JOIN transmissions t ON a.transmission_id = t.id
-        LEFT JOIN colors ec ON a.exterior_color_id = ec.id
-        LEFT JOIN colors ic ON a.interior_color_id = ic.id;
     """
-    df = pd.read_sql(query, engine)
-    return df
+    Loads raw auction data from the PostgreSQL database.
+    If the database is unavailable, falls back to the processed CSV file.
+    """
+    try:
+        engine = get_engine()
+        query = """
+            SELECT 
+                a.year,
+                a.mileage,
+                a.title_status,
+                a.state,
+                a.engine,
+                a.drivetrain,
+                a.body_style,
+                a.num_modifications,
+                a.has_forced_induction,
+                a.sale_price,
+                mk.name as make,
+                md.name as model,
+                t.name as transmission,
+                ec.name as exterior_color,
+                ic.name as interior_color
+            FROM auctions a
+            LEFT JOIN models md ON a.model_id = md.id
+            LEFT JOIN makes mk ON md.make_id = mk.id
+            LEFT JOIN transmissions t ON a.transmission_id = t.id
+            LEFT JOIN colors ec ON a.exterior_color_id = ec.id
+            LEFT JOIN colors ic ON a.interior_color_id = ic.id;
+        """
+        df = pd.read_sql(query, engine)
+        return df
+    except Exception as e:
+        print("Falling back to local CSV due to DB error:", e)
+        return pd.read_csv("data/processed/all_vehicles_cleaned.csv")
 
 def build_pipeline(numeric_features, categorical_features):
+    """
+    Constructs the Kaggle-tier machine learning pipeline.
+    
+    Architecture:
+    1. Preprocessing:
+       - Numerics: Median Imputation -> Scaling -> Spline Transformation (for smooth non-linear fits)
+       - Low Cardinality Categoricals: OneHotEncoding
+       - High Cardinality Categoricals: TargetEncoding (maps values to historical price medians)
+       
+    2. Model Stacking:
+       - Layer 1: RidgeCV (Linear model on splines) + GradientBoostingRegressor (Complex interactions)
+       - Layer 2: BayesianRidge (Learns the optimal weighting between Layer 1 predictions)
+       
+    3. Target Transformation:
+       - np.log1p / np.expm1 applied automatically to model price accurately in log-space.
+    """
     numeric_transformer = Pipeline(steps=[
         ('imputer', SimpleImputer(strategy='median')),
-        ('scaler', StandardScaler())
+        ('scaler', StandardScaler()),
+        ('splines', SplineTransformer(n_knots=5, degree=3, include_bias=False))
     ])
     
-    # Small threshold filters out noise like rare colors/states for small datasets
-    categorical_transformer = Pipeline(steps=[
-        ('imputer', SimpleImputer(strategy='constant', fill_value='Unknown')),
-        ('onehot', OneHotEncoder(handle_unknown='infrequent_if_exist', min_frequency=0.05))
-    ])
+    # Split categoricals into high and low cardinality
+    high_cardinality_cols = ['exterior_color', 'interior_color', 'state', 'location']
+    high_card_features = [c for c in categorical_features if c in high_cardinality_cols]
+    low_card_features = [c for c in categorical_features if c not in high_cardinality_cols]
     
-    preprocessor = ColumnTransformer(
-        transformers=[
-            ('num', numeric_transformer, numeric_features),
-            ('cat', categorical_transformer, categorical_features)
+    transformers = [('num', numeric_transformer, numeric_features)]
+    
+    if low_card_features:
+        low_card_transformer = Pipeline(steps=[
+            ('imputer', SimpleImputer(strategy='constant', fill_value='Unknown')),
+            ('onehot', OneHotEncoder(handle_unknown='ignore'))
         ])
+        transformers.append(('cat_low', low_card_transformer, low_card_features))
         
-    rf = RandomForestRegressor(random_state=42, criterion='absolute_error')
-    gb = GradientBoostingRegressor(random_state=42, loss='huber')
-    ridge = RidgeCV(alphas=np.logspace(-3, 3, 20))
-    lasso = LassoCV(alphas=np.logspace(-3, 3, 20), random_state=42)
-    
-    ensemble = VotingRegressor([
-        ('rf', rf), 
-        ('gb', gb),
-        ('ridge', ridge),
-        ('lasso', lasso)
-    ])
+    if high_card_features:
+        high_card_transformer = Pipeline(steps=[
+            ('imputer', SimpleImputer(strategy='constant', fill_value='Unknown')),
+            ('target', TargetEncoder(target_type='continuous', smooth=5.0))
+        ])
+        transformers.append(('cat_high', high_card_transformer, high_card_features))
+        
+    preprocessor = ColumnTransformer(transformers=transformers)
+        
+    estimators = [
+        ('ridge', RidgeCV(alphas=np.logspace(-4, 1, 20))),
+        ('gb', GradientBoostingRegressor(n_estimators=300, max_depth=3, random_state=42))
+    ]
+    stack = StackingRegressor(estimators=estimators, final_estimator=BayesianRidge())
     
     log_target_model = TransformedTargetRegressor(
-        regressor=ensemble,
+        regressor=stack,
         func=np.log1p,
         inverse_func=np.expm1
     )
@@ -115,38 +144,113 @@ def build_pipeline(numeric_features, categorical_features):
     ])
 
 def extract_feature_importances(pipeline, numeric_features, categorical_features):
-    transformed_model = pipeline.named_steps['model']
-    ensemble_model = transformed_model.regressor_
-    rf_model = ensemble_model.named_estimators_['rf']
+    """
+    Extracts feature importances from the StackingRegressor pipeline.
+    Specifically pulls the `feature_importances_` from the GradientBoosting component
+    and aggregates spline segments back into their base feature names for frontend display.
+    """
+    try:
+        # Extract the GradientBoostingRegressor from the StackingRegressor
+        stack = pipeline.named_steps['model'].regressor_
+        gb_model = stack.named_estimators_['gb']
+        
+        preprocessor = pipeline.named_steps['preprocessor']
+        
+        # Numeric names
+        spline = preprocessor.named_transformers_['num'].named_steps['splines']
+        num_feature_names = spline.get_feature_names_out(numeric_features)
+        
+        # Low cardinality names
+        low_card_cols = [col for name, _, cols in preprocessor.transformers_ if name == 'cat_low' for col in cols]
+        low_card_names = []
+        if 'cat_low' in preprocessor.named_transformers_:
+            cat_encoder = preprocessor.named_transformers_['cat_low'].named_steps['onehot']
+            low_card_names = cat_encoder.get_feature_names_out(low_card_cols)
+            
+        # High cardinality names (TargetEncoder keeps names 1:1)
+        high_card_cols = [col for name, _, cols in preprocessor.transformers_ if name == 'cat_high' for col in cols]
+        
+        feature_names = list(num_feature_names) + list(low_card_names) + list(high_card_cols)
+        importances = gb_model.feature_importances_
+        
+        df_imp = pd.DataFrame({
+            'Feature': feature_names,
+            'Importance': importances
+        })
+        
+        # Aggregate spline segments back into their base features
+        df_imp['Base_Feature'] = df_imp['Feature'].str.replace(r'_sp_\d+', '', regex=True)
+        df_imp = df_imp.groupby('Base_Feature', as_index=False)['Importance'].sum()
+        df_imp = df_imp.rename(columns={'Base_Feature': 'Feature'})
+        
+        df_imp = df_imp.sort_values(by='Importance', ascending=False)
+        return df_imp
+    except Exception as e:
+        print(f"Failed to extract feature importances: {e}")
+        return pd.DataFrame({'Feature': [], 'Importance': []})
+
+def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Applies unified feature engineering to the dataset.
+    This function is used both during model training and by the API during inference.
     
-    preprocessor = pipeline.named_steps['preprocessor']
-    cat_encoder = preprocessor.named_transformers_['cat'].named_steps['onehot']
-    cat_feature_names = cat_encoder.get_feature_names_out(categorical_features)
-    
-    feature_names = numeric_features + list(cat_feature_names)
-    importances = rf_model.feature_importances_
-    
-    df_imp = pd.DataFrame({
-        'Feature': feature_names,
-        'Importance': importances
-    }).sort_values(by='Importance', ascending=False)
-    
-    return df_imp
+    Creates features like 'mileage_log', 'age', 'mileage_per_year', and 'days_since_start'.
+    """
+    df_out = df.copy()
+    if 'mileage' in df_out.columns:
+        df_out['mileage_log'] = np.log1p(df_out['mileage'])
+    if 'year' in df_out.columns:
+        df_out['age'] = 2026 - df_out['year']
+        df_out['age'] = df_out['age'].replace(0, 1) # Prevent div by zero
+        if 'mileage' in df_out.columns:
+            df_out['mileage_per_year'] = df_out['mileage'] / df_out['age']
+            
+    if 'date' in df_out.columns:
+        df_out['date'] = pd.to_datetime(df_out['date'], errors='coerce')
+        baseline = pd.to_datetime('2020-01-01')
+        df_out['days_since_start'] = (df_out['date'] - baseline).dt.days
+        df_out['days_since_start'] = df_out['days_since_start'].fillna(df_out['days_since_start'].median())
+    else:
+        df_out['days_since_start'] = 1500 # Default fallback if DB lacks date
+        
+    # Ensure all expected columns exist even if DB didn't provide them
+    for col in ['exterior_color', 'interior_color', 'state', 'location']:
+        if col not in df_out.columns:
+            df_out[col] = 'Unknown'
+            
+    return df_out
 
 def train_and_evaluate(only_models: Optional[List[str]] = None):
     print("Loading data from PostgreSQL database...")
     df = load_data_from_db()
+    if df is None or len(df) == 0:
+        print("No data available to train. Exiting.")
+        return
+        
     df = df.dropna(subset=['sale_price']).copy()
+    
+    print("Removing price outliers...")
+    original_len = len(df)
+    Q1 = df.groupby('model')['sale_price'].transform(lambda x: x.quantile(0.25))
+    Q3 = df.groupby('model')['sale_price'].transform(lambda x: x.quantile(0.75))
+    IQR = Q3 - Q1
+    lower_bound = Q1 - 1.5 * IQR
+    upper_bound = Q3 + 1.5 * IQR
+    df = df[(df['sale_price'] >= lower_bound) & (df['sale_price'] <= upper_bound)].copy()
+    print(f"Removed {original_len - len(df)} outliers out of {original_len} total rows.")
     
     print("\n=============================================")
     print("TRAINING INDIVIDUAL CAR MODELS")
     print("=============================================")
     
+    # Feature Engineering
+    df = engineer_features(df)
+    
     X = df.drop(columns=['sale_price'])
     y = df['sale_price']
     
-    numeric_features = ['year', 'mileage', 'num_modifications', 'has_forced_induction']
-    cat_features = ['title_status', 'state', 'engine', 'drivetrain', 'transmission', 'body_style', 'exterior_color', 'interior_color']
+    numeric_features = ['year', 'age', 'mileage', 'mileage_log', 'mileage_per_year', 'num_modifications', 'has_forced_induction', 'days_since_start']
+    cat_features = ['title_status', 'engine', 'drivetrain', 'transmission', 'body_style', 'exterior_color', 'interior_color', 'state', 'location']
     
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     
@@ -182,29 +286,9 @@ def train_and_evaluate(only_models: Optional[List[str]] = None):
         
         pipeline = build_pipeline(numeric_features, valid_cat_features)
         
-        # Hyperparameter search space
-        param_dist = {
-            'model__regressor__rf__n_estimators': [50, 100, 200],
-            'model__regressor__rf__max_depth': [3, 5, 7, 10],
-            'model__regressor__rf__min_samples_leaf': [1, 2, 4],
-            'model__regressor__gb__n_estimators': [50, 100, 150],
-            'model__regressor__gb__learning_rate': [0.01, 0.05, 0.1],
-            'model__regressor__gb__max_depth': [2, 3, 5],
-            'model__regressor__gb__min_samples_leaf': [1, 2, 4]
-        }
-        
-        print(f"Tuning ensemble on {len(car_train_df)} samples...")
-        random_search = RandomizedSearchCV(
-            pipeline, 
-            param_dist, 
-            n_iter=50, 
-            cv=5, 
-            scoring='neg_mean_absolute_error', 
-            n_jobs=-1, 
-            random_state=42
-        )
-        random_search.fit(X_train_car, y_train_car)
-        best_model = random_search.best_estimator_
+        print(f"Training simple ensemble on {len(car_train_df)} samples...")
+        pipeline.fit(X_train_car, y_train_car)
+        best_model = pipeline
         
         trained_models[car_model] = best_model
         

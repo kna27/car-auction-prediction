@@ -18,7 +18,10 @@ PROCESSED_DATA_PATH = os.path.join("data", "processed", "all_vehicles_cleaned.cs
 SCHEMA_PATH = os.path.join("src", "data", "schema.sql")
 
 def get_engine():
-    # Example connection string for psycopg2
+    """
+    Creates and returns a SQLAlchemy engine using environment variables.
+    Handles connections both with and without a password.
+    """
     if DB_PASSWORD:
         connection_string = f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
     else:
@@ -26,6 +29,10 @@ def get_engine():
     return create_engine(connection_string)
 
 def setup_database(engine):
+    """
+    Initializes the PostgreSQL database schema by running the schema.sql script.
+    Creates necessary tables (e.g., auctions, models, makes) if they do not exist.
+    """
     with engine.connect() as conn:
         with open(SCHEMA_PATH, 'r') as f:
             sql_script = f.read()
@@ -34,6 +41,10 @@ def setup_database(engine):
         print("Database schema initialized.")
 
 def get_or_create(conn, table, column, value, extra_cols=None, extra_vals=None):
+    """
+    Helper function to efficiently query for a normalized relational table ID.
+    If the value does not exist, it inserts it and returns the newly generated ID.
+    """
     if not extra_cols:
         extra_cols = []
     if not extra_vals:
@@ -59,6 +70,10 @@ def get_or_create(conn, table, column, value, extra_cols=None, extra_vals=None):
         return new_id
 
 def get_existing_auction_urls(conn) -> set:
+    """
+    Retrieves a set of all URLs currently in the 'auctions' table.
+    Used for rapid deduplication before inserting new rows.
+    """
     r = conn.execute(text("SELECT url FROM auctions WHERE url IS NOT NULL"))
     return {row[0] for row in r.fetchall()}
 

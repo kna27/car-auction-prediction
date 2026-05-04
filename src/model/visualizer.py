@@ -22,14 +22,18 @@ def _model_slug(name: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_\-]", "", s)
 
 
+def _load_predictions_df(path=None) -> pd.DataFrame | None:
+    """Helper to load predictions CSV and handle empty/missing files gracefully."""
+    p = path or os.path.join(RESULTS_DIR, "test_predictions.csv")
+    if not os.path.exists(p):
+        return None
+    df = pd.read_csv(p)
+    return None if df.empty else df
+
 def _get_model_colors():
     """Returns a dictionary mapping model names to consistent colors."""
-    pred_path = os.path.join(RESULTS_DIR, "test_predictions.csv")
-    if not os.path.exists(pred_path):
-        return {}
-    
-    df = pd.read_csv(pred_path)
-    if "model" not in df.columns:
+    df = _load_predictions_df()
+    if df is None or "model" not in df.columns:
         return {}
         
     models = sorted(df["model"].dropna().unique())
@@ -43,11 +47,14 @@ def _get_model_colors():
 
 
 def plot_accuracy_line_graph():
-    pred_path = os.path.join(RESULTS_DIR, "test_predictions.csv")
-    if not os.path.exists(pred_path):
+    """
+    Plots a line graph comparing actual vs. predicted prices for all test samples across all models,
+    sorted by the actual sale price.
+    """
+    df = _load_predictions_df()
+    if df is None:
         return
 
-    df = pd.read_csv(pred_path)
     df_sorted = df.sort_values(by="Actual").reset_index(drop=True)
 
     plt.figure(figsize=(14, 7))
@@ -85,12 +92,12 @@ def plot_accuracy_line_graph():
 
 
 def plot_aggregate_actual_vs_predicted():
-    pred_path = os.path.join(RESULTS_DIR, "test_predictions.csv")
-    if not os.path.exists(pred_path):
-        return
-
-    df = pd.read_csv(pred_path)
-    if df.empty:
+    """
+    Creates a scatter plot of Actual vs. Predicted prices for all models.
+    Includes a perfect prediction diagonal line for reference.
+    """
+    df = _load_predictions_df()
+    if df is None:
         return
 
     plt.figure(figsize=(9, 9))
@@ -123,12 +130,12 @@ def plot_aggregate_actual_vs_predicted():
 
 
 def plot_aggregate_residuals():
-    pred_path = os.path.join(RESULTS_DIR, "test_predictions.csv")
-    if not os.path.exists(pred_path):
-        return
-
-    df = pd.read_csv(pred_path)
-    if df.empty:
+    """
+    Plots the residuals (Actual - Predicted) against the predicted sale price.
+    Useful for diagnosing heteroscedasticity and model bias.
+    """
+    df = _load_predictions_df()
+    if df is None:
         return
 
     df = df.copy()
@@ -161,12 +168,12 @@ def plot_aggregate_residuals():
 
 
 def plot_price_distribution_by_model():
-    pred_path = os.path.join(RESULTS_DIR, "test_predictions.csv")
-    if not os.path.exists(pred_path):
-        return
-
-    df = pd.read_csv(pred_path)
-    if df.empty or "model" not in df.columns:
+    """
+    Creates a boxplot showing the distribution of actual sale prices for each model
+    in the test set. Useful for understanding the price range of different vehicles.
+    """
+    df = _load_predictions_df()
+    if df is None or "model" not in df.columns:
         return
 
     plt.figure(figsize=(12, 6))
@@ -197,11 +204,9 @@ def plot_model_accuracy_line(model_slug: str) -> None:
     per_path = os.path.join(RESULTS_DIR, f"test_predictions_{model_slug}.csv")
     agg_path = os.path.join(RESULTS_DIR, "test_predictions.csv")
     pred_path = per_path if os.path.exists(per_path) else agg_path
-    if not os.path.exists(pred_path):
-        return
-
-    df = pd.read_csv(pred_path)
-    if df.empty:
+    
+    df = _load_predictions_df(pred_path)
+    if df is None:
         return
 
     if "model" in df.columns and pred_path == agg_path:
@@ -255,17 +260,17 @@ def plot_model_accuracy_line(model_slug: str) -> None:
 
 
 def plot_per_model_accuracy_lines(only_slugs: list[str] | None = None):
+    """
+    Generates individual accuracy line plots for each specified model slug.
+    If no slugs are provided, it generates plots for all unique models in the aggregate predictions file.
+    """
     if only_slugs:
         for s in only_slugs:
             plot_model_accuracy_line(s)
         return
 
-    pred_path = os.path.join(RESULTS_DIR, "test_predictions.csv")
-    if not os.path.exists(pred_path):
-        return
-
-    df = pd.read_csv(pred_path)
-    if df.empty or "model" not in df.columns:
+    df = _load_predictions_df()
+    if df is None or "model" not in df.columns:
         return
 
     for model_name in df["model"].dropna().unique():
