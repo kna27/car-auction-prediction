@@ -18,10 +18,7 @@ PROCESSED_DATA_PATH = os.path.join("data", "processed", "all_vehicles_cleaned.cs
 SCHEMA_PATH = os.path.join("src", "data", "schema.sql")
 
 def get_engine():
-    """
-    Creates and returns a SQLAlchemy engine using environment variables.
-    Handles connections both with and without a password.
-    """
+    """Creates and returns a SQLAlchemy engine using environment variables"""
     if DB_PASSWORD:
         connection_string = f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
     else:
@@ -29,10 +26,7 @@ def get_engine():
     return create_engine(connection_string)
 
 def setup_database(engine):
-    """
-    Initializes the PostgreSQL database schema by running the schema.sql script.
-    Creates necessary tables (e.g., auctions, models, makes) if they do not exist.
-    """
+    """Initializes the PostgreSQL database schema by running the schema.sql script"""
     with engine.connect() as conn:
         with open(SCHEMA_PATH, 'r') as f:
             sql_script = f.read()
@@ -41,10 +35,7 @@ def setup_database(engine):
         print("Database schema initialized.")
 
 def get_or_create(conn, table, column, value, extra_cols=None, extra_vals=None):
-    """
-    Helper function to efficiently query for a normalized relational table ID.
-    If the value does not exist, it inserts it and returns the newly generated ID.
-    """
+    """If value does not exist in the table, insert it and return the new ID"""
     if not extra_cols:
         extra_cols = []
     if not extra_vals:
@@ -54,31 +45,28 @@ def get_or_create(conn, table, column, value, extra_cols=None, extra_vals=None):
     result = conn.execute(query, {"val": value}).fetchone()
     
     if result:
+        # Return the ID if the value already exists
         return result[0]
     else:
+        # Insert the value and return the new ID
         cols = [column] + extra_cols
-        vals = [value] + extra_vals
         placeholders = [":val"] + [f":val{i}" for i in range(len(extra_vals))]
-        
         insert_query = text(f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join(placeholders)}) RETURNING id")
-        
         params = {"val": value}
         for i, v in enumerate(extra_vals):
             params[f"val{i}"] = v
-            
+        # Execute the insert query and return the new ID
         new_id = conn.execute(insert_query, params).fetchone()[0]
         return new_id
 
 def get_existing_auction_urls(conn) -> set:
-    """
-    Retrieves a set of all URLs currently in the 'auctions' table.
-    Used for rapid deduplication before inserting new rows.
-    """
+    """Returns a set of all URLs currently in the 'auctions' table"""
     r = conn.execute(text("SELECT url FROM auctions WHERE url IS NOT NULL"))
     return {row[0] for row in r.fetchall()}
 
 
 def load_data(engine, df: Optional[pd.DataFrame] = None):
+    """Loads cleaned auction data into the database"""
     if df is None:
         if not os.path.exists(PROCESSED_DATA_PATH):
             print(f"Processed data file not found: {PROCESSED_DATA_PATH}")
@@ -93,6 +81,7 @@ def load_data(engine, df: Optional[pd.DataFrame] = None):
         existing = get_existing_auction_urls(conn)
         inserted = 0
         skipped = 0
+        # Iterate over cleaned rows and insert into database
         for _, row in df.iterrows():
             row_url = row['url'] if pd.notna(row.get('url')) else None
             if not row_url:

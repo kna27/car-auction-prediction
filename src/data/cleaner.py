@@ -10,7 +10,7 @@ ALL_VEHICLES_CLEANED = os.path.join(PROCESSED_DATA_DIR, "all_vehicles_cleaned.cs
 
 def clean_mileage(mileage_str):
     """
-    Extracts numerical digits from a raw mileage string (e.g., '54,000 miles' -> 54000).
+    Extracts numerical mileage from raw string ("54,000 miles" -> 54000)
     """
     if pd.isna(mileage_str):
         return np.nan
@@ -18,39 +18,34 @@ def clean_mileage(mileage_str):
     digits = ''.join(filter(str.isdigit, str(mileage_str)))
     return int(digits) if digits else np.nan
 
-def clean_dataset(df: pd.DataFrame, drop_rebuilt=True) -> pd.DataFrame:
+def clean_dataset(df: pd.DataFrame) -> pd.DataFrame:
     """
     Cleans raw auction dataset by parsing dates, imputing missing values, 
-    and extracting features like forced induction.
+    and extracting features
     """
-    # 0. Initial Filtering (Outliers / Rebuilt Titles)
     # Drop Rebuilt or Salvage titles as they skew prices
-    if drop_rebuilt:
-        df = df[~df['title_status'].str.contains("Rebuilt|Salvage", case=False, na=False)].copy()
-    else:
-        df = df.copy()
-
+    df = df[~df['title_status'].str.contains("Rebuilt|Salvage", case=False, na=False)].copy()
     # Clean the " Save" artifact from model name
     df['model'] = df['model'].str.replace(" Save", "", regex=False)
 
-    # 1. Clean Mileage
+    # Clean Mileage
     df['mileage'] = df['mileage'].apply(clean_mileage)
     df['mileage'] = df['mileage'].fillna(df['mileage'].median())
 
-    # 1b. Clean Year
+    # Clean Year
     if 'year' in df.columns:
         df['year'] = pd.to_numeric(df['year'], errors='coerce')
         df['year'] = df['year'].fillna(df['year'].median()).astype(int)
 
-    # 2. Clean Sale Price
+    # Clean Sale Price
     df['sale_price'] = pd.to_numeric(df['sale_price'], errors='coerce')
     df['sale_price'] = df['sale_price'].fillna(df['sale_price'].median())
 
-    # 3. Clean Num Modifications
+    # Clean Num Modifications
     df['num_modifications'] = pd.to_numeric(df['num_modifications'], errors='coerce')
     df['num_modifications'] = df['num_modifications'].fillna(0) # Default to 0
 
-    # 4. Handle Categorical Columns
+    # Handle Categorical Columns
     categorical_cols = [
         'make', 'model', 'title_status', 'location', 'engine', 
         'drivetrain', 'transmission', 'body_style', 'exterior_color', 'interior_color'
@@ -72,7 +67,7 @@ def clean_dataset(df: pd.DataFrame, drop_rebuilt=True) -> pd.DataFrame:
         df['transmission'] = df['transmission'].str.replace(" )", ")", regex=False)
         df['transmission'] = df['transmission'].str.replace(" Manual)", ")", regex=False)
 
-    # 4b. Feature Engineering: Forced Induction
+    # Feature Engineering: Forced Induction
     if 'engine' in df.columns:
         df['has_forced_induction'] = df['engine'].str.contains("Supercharged|Turbocharged|Twin Turbo|Turbo", case=False).astype(int)
         # Normalize engine name while keeping forced induction details for specific trim categorization
@@ -83,15 +78,15 @@ def clean_dataset(df: pd.DataFrame, drop_rebuilt=True) -> pd.DataFrame:
         df['engine'] = df['engine'].str.replace("Flat-Six", "Flat-6", case=False, regex=False)
         df['engine'] = df['engine'].str.replace(r"(\d\.\d) Flat-6", r"\1L Flat-6", regex=True)
 
-    # 4c. Clean Title Status (remove state info)
+    # Clean Title Status (remove state info)
     if 'title_status' in df.columns:
         df['title_status'] = df['title_status'].str.split('(').str[0].str.strip()
 
-    # 5. Extract State from Location (assuming format "City, State, Zip" or "City, State")
+    # Extract State from Location
     def extract_state(loc):
         parts = loc.split(',')
         if len(parts) >= 2:
-            # State is usually the first part after city
+            # State is the first part after city
             state_part = parts[1].strip().split(' ')[0]
             return state_part
         return loc
@@ -103,7 +98,7 @@ def clean_dataset(df: pd.DataFrame, drop_rebuilt=True) -> pd.DataFrame:
 
 
 def merge_into_all_vehicles_cleaned(df_new: pd.DataFrame) -> pd.DataFrame:
-    """Append new cleaned rows to the master CSV, deduplicated by auction url."""
+    """Append new cleaned rows to main CSV file, removing duplicates by auction URL"""
     os.makedirs(PROCESSED_DATA_DIR, exist_ok=True)
     if os.path.exists(ALL_VEHICLES_CLEANED):
         df_existing = pd.read_csv(ALL_VEHICLES_CLEANED)
@@ -117,10 +112,7 @@ def merge_into_all_vehicles_cleaned(df_new: pd.DataFrame) -> pd.DataFrame:
 
 
 def main():
-    """
-    Iterates through all raw CSV files, applies dataset cleaning, and combines them into 
-    the master `all_vehicles_cleaned.csv` file for training.
-    """
+    """Iterates through all raw CSV files, applies dataset cleaning, and combines them"""
     os.makedirs(PROCESSED_DATA_DIR, exist_ok=True)
     raw_files = glob.glob(os.path.join(RAW_DATA_DIR, "*_raw.csv"))
     
@@ -142,7 +134,7 @@ def main():
         
         all_data.append(cleaned_df)
         
-    # Combine into one master dataset
+    # Combine into one CSV file
     if all_data:
         master_df = pd.concat(all_data, ignore_index=True)
         master_df.to_csv(ALL_VEHICLES_CLEANED, index=False)

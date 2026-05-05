@@ -1,3 +1,4 @@
+from datetime import datetime
 import json
 import os
 from typing import List, Optional
@@ -15,11 +16,11 @@ from sklearn.metrics import (mean_absolute_error,
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler, SplineTransformer, TargetEncoder
-from sqlalchemy import create_engine
 import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from src.model.visualizer import _model_slug
+from src.data.loader import get_engine
 
 load_dotenv()
 
@@ -29,25 +30,9 @@ RESULTS_DIR = os.path.join("src", "model", "results")
 os.makedirs(MODEL_DIR, exist_ok=True)
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
-# Database connection parameters
-DB_USER = os.getenv("DB_USER", "postgres")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "")
-DB_HOST = os.getenv("DB_HOST", "localhost")
-DB_PORT = os.getenv("DB_PORT", "5432")
-DB_NAME = os.getenv("DB_NAME", "car_auctions")
-
-def get_engine():
-    if DB_PASSWORD:
-        connection_string = f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-    else:
-        connection_string = f"postgresql+psycopg2://{DB_USER}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-    return create_engine(connection_string)
-
 def load_data_from_db():
-    """
-    Loads raw auction data from the PostgreSQL database.
-    If the database is unavailable, falls back to the processed CSV file.
-    """
+    """Loads raw auction data from the PostgreSQL database"""
+    # Use LEFT JOINs to select all auction records even if some fields are missing
     try:
         engine = get_engine()
         query = """
@@ -77,14 +62,12 @@ def load_data_from_db():
         df = pd.read_sql(query, engine)
         return df
     except Exception as e:
-        print("Falling back to local CSV due to DB error:", e)
+        # Fallback to CSV if unable to connect to DB
+        print("Falling back to CSV due to DB error:", e)
         return pd.read_csv("data/processed/all_vehicles_cleaned.csv")
 
 def build_pipeline(numeric_features, categorical_features):
     """
-    Constructs the Kaggle-tier machine learning pipeline.
-    
-    Architecture:
     1. Preprocessing:
        - Numerics: Median Imputation -> Scaling -> Spline Transformation (for smooth non-linear fits)
        - Low Cardinality Categoricals: OneHotEncoding
@@ -97,6 +80,7 @@ def build_pipeline(numeric_features, categorical_features):
     3. Target Transformation:
        - np.log1p / np.expm1 applied automatically to model price accurately in log-space.
     """
+    # Numeric features: Impute missing values with median, scale, and apply splines
     numeric_transformer = Pipeline(steps=[
         ('imputer', SimpleImputer(strategy='median')),
         ('scaler', StandardScaler()),
@@ -108,9 +92,11 @@ def build_pipeline(numeric_features, categorical_features):
     high_card_features = [c for c in categorical_features if c in high_cardinality_cols]
     low_card_features = [c for c in categorical_features if c not in high_cardinality_cols]
     
+    # Initialize list of transformers with numeric features
     transformers = [('num', numeric_transformer, numeric_features)]
     
     if low_card_features:
+        # Low cardinality categoricals: One-hot encode
         low_card_transformer = Pipeline(steps=[
             ('imputer', SimpleImputer(strategy='constant', fill_value='Unknown')),
             ('onehot', OneHotEncoder(handle_unknown='ignore'))
@@ -118,20 +104,25 @@ def build_pipeline(numeric_features, categorical_features):
         transformers.append(('cat_low', low_card_transformer, low_card_features))
         
     if high_card_features:
+        # High cardinality categoricals: Target encode using historical medians
         high_card_transformer = Pipeline(steps=[
             ('imputer', SimpleImputer(strategy='constant', fill_value='Unknown')),
             ('target', TargetEncoder(target_type='continuous', smooth=5.0))
         ])
         transformers.append(('cat_high', high_card_transformer, high_card_features))
         
+    # Combine all feature transformations
     preprocessor = ColumnTransformer(transformers=transformers)
         
+    # Define base models for the stacking regressor
     estimators = [
         ('ridge', RidgeCV(alphas=np.logspace(-4, 1, 20))),
         ('gb', GradientBoostingRegressor(n_estimators=300, max_depth=3, random_state=42))
     ]
+    # Meta-learner to combine predictions from base models
     stack = StackingRegressor(estimators=estimators, final_estimator=BayesianRidge())
     
+    # Wrap model to train on log-transformed prices and exponentiate predictions
     log_target_model = TransformedTargetRegressor(
         regressor=stack,
         func=np.log1p,
@@ -144,19 +135,16 @@ def build_pipeline(numeric_features, categorical_features):
     ])
 
 def extract_feature_importances(pipeline, numeric_features, categorical_features):
-    """
-    Extracts feature importances from the StackingRegressor pipeline.
-    Specifically pulls the `feature_importances_` from the GradientBoosting component
-    and aggregates spline segments back into their base feature names for frontend display.
-    """
+    """Extracts feature importances from GradientBoosting component and aggregates spline segments"""
     try:
         # Extract the GradientBoostingRegressor from the StackingRegressor
         stack = pipeline.named_steps['model'].regressor_
         gb_model = stack.named_estimators_['gb']
         
+        # Get the preprocessor to extract feature names
         preprocessor = pipeline.named_steps['preprocessor']
         
-        # Numeric names
+        # Extract numeric feature names from spline transformer
         spline = preprocessor.named_transformers_['num'].named_steps['splines']
         num_feature_names = spline.get_feature_names_out(numeric_features)
         
@@ -167,12 +155,14 @@ def extract_feature_importances(pipeline, numeric_features, categorical_features
             cat_encoder = preprocessor.named_transformers_['cat_low'].named_steps['onehot']
             low_card_names = cat_encoder.get_feature_names_out(low_card_cols)
             
-        # High cardinality names (TargetEncoder keeps names 1:1)
+        # High cardinality names
         high_card_cols = [col for name, _, cols in preprocessor.transformers_ if name == 'cat_high' for col in cols]
         
+        # Combine all feature names and fetch importances
         feature_names = list(num_feature_names) + list(low_card_names) + list(high_card_cols)
         importances = gb_model.feature_importances_
         
+        # Create DataFrame mapping features to their importances
         df_imp = pd.DataFrame({
             'Feature': feature_names,
             'Importance': importances
@@ -183,6 +173,7 @@ def extract_feature_importances(pipeline, numeric_features, categorical_features
         df_imp = df_imp.groupby('Base_Feature', as_index=False)['Importance'].sum()
         df_imp = df_imp.rename(columns={'Base_Feature': 'Feature'})
         
+        # Sort by most important and return
         df_imp = df_imp.sort_values(by='Importance', ascending=False)
         return df_imp
     except Exception as e:
@@ -190,17 +181,13 @@ def extract_feature_importances(pipeline, numeric_features, categorical_features
         return pd.DataFrame({'Feature': [], 'Importance': []})
 
 def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Applies unified feature engineering to the dataset.
-    This function is used both during model training and by the API during inference.
-    
-    Creates features like 'mileage_log', 'age', 'mileage_per_year', and 'days_since_start'.
-    """
+    """Applies unified feature engineering to dataset"""
     df_out = df.copy()
     if 'mileage' in df_out.columns:
         df_out['mileage_log'] = np.log1p(df_out['mileage'])
     if 'year' in df_out.columns:
-        df_out['age'] = 2026 - df_out['year']
+        current_year = datetime.now().year
+        df_out['age'] = current_year - df_out['year']
         df_out['age'] = df_out['age'].replace(0, 1) # Prevent div by zero
         if 'mileage' in df_out.columns:
             df_out['mileage_per_year'] = df_out['mileage'] / df_out['age']
@@ -211,9 +198,9 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
         df_out['days_since_start'] = (df_out['date'] - baseline).dt.days
         df_out['days_since_start'] = df_out['days_since_start'].fillna(df_out['days_since_start'].median())
     else:
-        df_out['days_since_start'] = 1500 # Default fallback if DB lacks date
+        df_out['days_since_start'] = 1500 # Default fallback if DB doesn't have date
         
-    # Ensure all expected columns exist even if DB didn't provide them
+    # Ensure expected columns exist
     for col in ['exterior_color', 'interior_color', 'state', 'location']:
         if col not in df_out.columns:
             df_out[col] = 'Unknown'
@@ -231,11 +218,15 @@ def train_and_evaluate(only_models: Optional[List[str]] = None):
     
     print("Removing price outliers...")
     original_len = len(df)
+    
+    # Calculate IQR per model to define bounds for outlier removal
     Q1 = df.groupby('model')['sale_price'].transform(lambda x: x.quantile(0.25))
     Q3 = df.groupby('model')['sale_price'].transform(lambda x: x.quantile(0.75))
     IQR = Q3 - Q1
     lower_bound = Q1 - 1.5 * IQR
     upper_bound = Q3 + 1.5 * IQR
+    
+    # Filter out rows falling outside the expected price range
     df = df[(df['sale_price'] >= lower_bound) & (df['sale_price'] <= upper_bound)].copy()
     print(f"Removed {original_len - len(df)} outliers out of {original_len} total rows.")
     
@@ -252,12 +243,15 @@ def train_and_evaluate(only_models: Optional[List[str]] = None):
     numeric_features = ['year', 'age', 'mileage', 'mileage_log', 'mileage_per_year', 'num_modifications', 'has_forced_induction', 'days_since_start']
     cat_features = ['title_status', 'engine', 'drivetrain', 'transmission', 'body_style', 'exterior_color', 'interior_color', 'state', 'location']
     
+    # Split into train and test sets
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     
+    # Track models, predictions, and metrics
     trained_models = {}
     test_results_list = []
     per_model_metrics: dict = {}
     
+    # Save indices to filter data for individual models later
     train_indices = X_train.index
     test_indices = X_test.index
     
@@ -269,9 +263,11 @@ def train_and_evaluate(only_models: Optional[List[str]] = None):
     for car_model in candidate_models:
         print(f"\n--- Model: {car_model} ---")
         
+        # Filter training data for this specific car model
         car_train_df = df.loc[train_indices]
         car_train_df = car_train_df[car_train_df['model'] == car_model]
         
+        # Filter testing data for this specific car model
         car_test_df = df.loc[test_indices]
         car_test_df = car_test_df[car_test_df['model'] == car_model]
             
@@ -281,7 +277,7 @@ def train_and_evaluate(only_models: Optional[List[str]] = None):
         X_test_car = car_test_df.drop(columns=['sale_price', 'make', 'model'])
         y_test_car = car_test_df['sale_price']
         
-        # Filter out constant categorical features to reduce noise
+        # Filter constant categorical features
         valid_cat_features = [col for col in cat_features if X_train_car[col].nunique() > 1]
         
         pipeline = build_pipeline(numeric_features, valid_cat_features)
@@ -292,6 +288,7 @@ def train_and_evaluate(only_models: Optional[List[str]] = None):
         
         trained_models[car_model] = best_model
         
+        # Generate predictions on the test set and calculate metrics
         preds = best_model.predict(X_test_car)
         mae = mean_absolute_error(y_test_car, preds)
         r2 = r2_score(y_test_car, preds)
@@ -311,7 +308,7 @@ def train_and_evaluate(only_models: Optional[List[str]] = None):
         car_test_results['Actual'] = y_test_car
         test_results_list.append(car_test_results)
 
-        # Save per-model predictions (used to draw per-model charts on incremental runs)
+        # Save per-model predictions
         car_test_results.to_csv(
             os.path.join(RESULTS_DIR, f"test_predictions_{_model_slug(car_model)}.csv"),
             index=False,
@@ -329,7 +326,7 @@ def train_and_evaluate(only_models: Optional[List[str]] = None):
     
     if test_results_list:
         test_results = pd.concat(test_results_list)
-        # Update the aggregate file (merge on incremental runs, overwrite on full runs).
+        # Update aggregate file
         agg_path = os.path.join(RESULTS_DIR, "test_predictions.csv")
         if only_models and os.path.exists(agg_path):
             try:
@@ -352,7 +349,7 @@ def train_and_evaluate(only_models: Optional[List[str]] = None):
         print(f"Aggregate MAPE: {aggregate_mape:.2%}")
         print(f"Aggregate R2  : {aggregate_r2:.3f}")
         
-        # Save summary (merge per_model into existing on incremental runs)
+        # Load existing summary metrics if they exist
         summary_path = os.path.join(RESULTS_DIR, "experiment_summary.json")
         existing = {}
         if os.path.exists(summary_path):

@@ -23,7 +23,7 @@ def _model_slug(name: str) -> str:
 
 
 def _load_predictions_df(path=None) -> pd.DataFrame | None:
-    """Helper to load predictions CSV and handle empty/missing files gracefully."""
+    """Loads predictions CSV"""
     p = path or os.path.join(RESULTS_DIR, "test_predictions.csv")
     if not os.path.exists(p):
         return None
@@ -31,7 +31,7 @@ def _load_predictions_df(path=None) -> pd.DataFrame | None:
     return None if df.empty else df
 
 def _get_model_colors():
-    """Returns a dictionary mapping model names to consistent colors."""
+    """Returns dictionary mapping model names to colors"""
     df = _load_predictions_df()
     if df is None or "model" not in df.columns:
         return {}
@@ -47,17 +47,17 @@ def _get_model_colors():
 
 
 def plot_accuracy_line_graph():
-    """
-    Plots a line graph comparing actual vs. predicted prices for all test samples across all models,
-    sorted by the actual sale price.
-    """
+    """Plots actual vs predicted prices sorted by actual price"""
+    # Load predictions dataset and exit if empty
     df = _load_predictions_df()
     if df is None:
         return
 
+    # Sort test samples by actual price to create a smooth baseline curve
     df_sorted = df.sort_values(by="Actual").reset_index(drop=True)
 
     plt.figure(figsize=(14, 7))
+    # Plot the actual prices as a solid white line
     plt.plot(
         df_sorted.index,
         df_sorted["Actual"],
@@ -66,6 +66,7 @@ def plot_accuracy_line_graph():
         linewidth=2,
         zorder=1,
     )
+    # Overlay predicted prices as colored scatter points
     sns.scatterplot(
         x=df_sorted.index,
         y=df_sorted["Predicted"],
@@ -92,15 +93,14 @@ def plot_accuracy_line_graph():
 
 
 def plot_aggregate_actual_vs_predicted():
-    """
-    Creates a scatter plot of Actual vs. Predicted prices for all models.
-    Includes a perfect prediction diagonal line for reference.
-    """
+    """Creates scatter plot of actual vs predicted prices"""
+    # Load predictions dataset and exit if empty
     df = _load_predictions_df()
     if df is None:
         return
 
     plt.figure(figsize=(9, 9))
+    # Scatter predicted vs actual, colored by model
     sns.scatterplot(
         x="Actual",
         y="Predicted",
@@ -111,6 +111,7 @@ def plot_aggregate_actual_vs_predicted():
         palette=_get_model_colors(),
     )
 
+    # Draw a diagonal dashed line representing perfect predictions
     min_val = min(df["Actual"].min(), df["Predicted"].min())
     max_val = max(df["Actual"].max(), df["Predicted"].max())
     plt.plot([min_val, max_val], [min_val, max_val], color="white", linestyle="--", alpha=0.5)
@@ -130,14 +131,13 @@ def plot_aggregate_actual_vs_predicted():
 
 
 def plot_aggregate_residuals():
-    """
-    Plots the residuals (Actual - Predicted) against the predicted sale price.
-    Useful for diagnosing heteroscedasticity and model bias.
-    """
+    """Plots residuals against predicted sale price"""
+    # Load predictions dataset and exit if empty
     df = _load_predictions_df()
     if df is None:
         return
 
+    # Calculate residual (error) for each prediction
     df = df.copy()
     df["Residual"] = df["Actual"] - df["Predicted"]
 
@@ -168,15 +168,14 @@ def plot_aggregate_residuals():
 
 
 def plot_price_distribution_by_model():
-    """
-    Creates a boxplot showing the distribution of actual sale prices for each model
-    in the test set. Useful for understanding the price range of different vehicles.
-    """
+    """Creates boxplot of actual sale prices by model"""
+    # Load predictions dataset and exit if empty
     df = _load_predictions_df()
     if df is None or "model" not in df.columns:
         return
 
     plt.figure(figsize=(12, 6))
+    # Sort models alphabetically and plot price distribution
     order = sorted(df["model"].dropna().unique(), key=str)
     sns.boxplot(data=df, x="model", y="Actual", order=order, palette=_get_model_colors(), hue="model", legend=False)
     plt.xticks(rotation=25, ha="right")
@@ -195,26 +194,25 @@ def plot_price_distribution_by_model():
 
 
 def plot_model_accuracy_line(model_slug: str) -> None:
-    """
-    Prefer per-model predictions file if present:
-    - src/model/results/test_predictions_<slug>.csv
-    Fallback to the aggregate test_predictions.csv.
-    """
+    """Plots model accuracy line from per-model or aggregate predictions"""
+    # Determine correct file path: use per-model CSV if available, otherwise fallback to aggregate
     model_slug = _model_slug(model_slug)
     per_path = os.path.join(RESULTS_DIR, f"test_predictions_{model_slug}.csv")
     agg_path = os.path.join(RESULTS_DIR, "test_predictions.csv")
     pred_path = per_path if os.path.exists(per_path) else agg_path
     
+    # Load the selected predictions file
     df = _load_predictions_df(pred_path)
     if df is None:
         return
 
+    # Filter to specific model if we fell back to the aggregate file
     if "model" in df.columns and pred_path == agg_path:
-        # Filter to the specific model when using the aggregate file.
         df = df[df["model"].apply(_model_slug) == model_slug]
         if df.empty:
             return
 
+    # Sort actual prices to form a smooth curve
     df_sorted = df.sort_values(by="Actual").reset_index(drop=True)
     if len(df_sorted) < 2:
         return
@@ -260,10 +258,7 @@ def plot_model_accuracy_line(model_slug: str) -> None:
 
 
 def plot_per_model_accuracy_lines(only_slugs: list[str] | None = None):
-    """
-    Generates individual accuracy line plots for each specified model slug.
-    If no slugs are provided, it generates plots for all unique models in the aggregate predictions file.
-    """
+    """Generates accuracy line plots for each model"""
     if only_slugs:
         for s in only_slugs:
             plot_model_accuracy_line(s)
@@ -278,7 +273,7 @@ def plot_per_model_accuracy_lines(only_slugs: list[str] | None = None):
 
 
 def generate_all_visualizations():
-    """Regenerate charts from the latest training run (no feature-importance PNGs)."""
+    """Regenerates all visualizations"""
     plot_accuracy_line_graph()
     plot_aggregate_actual_vs_predicted()
     plot_aggregate_residuals()

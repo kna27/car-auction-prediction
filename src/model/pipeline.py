@@ -68,6 +68,7 @@ def run_training_pipeline(search_path: str) -> None:
     driver: Optional[Any] = None
 
     try:
+        # Set up headless Chrome environment for scraping
         chrome_options = ChromeOptions()
         chrome_options.add_argument("--headless=new")
         chrome_options.add_argument("--no-sandbox")
@@ -83,6 +84,7 @@ def run_training_pipeline(search_path: str) -> None:
             options=chrome_options,
         )
 
+        # Ensure search path is properly formatted for Cars & Bids
         full_path = f"/search/{search_path}" if not search_path.startswith("/") else search_path
         if not full_path.startswith("/search/"):
             full_path = f"/search/{search_path}"
@@ -117,14 +119,18 @@ def run_training_pipeline(search_path: str) -> None:
             )
             return
 
+        # Save raw scraped data to CSV
         slug = search_path.replace("/", "_").replace("-", "_")
         output_file = os.path.join(_ROOT, "data", "raw", f"{slug}_raw.csv")
         os.makedirs(os.path.dirname(output_file), exist_ok=True)
         write_csv(rows, output_file)
 
+        # Process and clean the scraped data
         _set_state(phase="cleaning", message="Cleaning data…", fetched=len(rows), total=len(rows))
         df_raw = pd.DataFrame(rows)
         df_clean = clean_dataset(df_raw, drop_rebuilt=True)
+        
+        # Merge new records into the master dataset
         merge_into_all_vehicles_cleaned(df_clean)
 
         # Download representative images for each model
@@ -135,14 +141,14 @@ def run_training_pipeline(search_path: str) -> None:
             model_slug = _model_slug(model_name)
             img_path = os.path.join(car_images_dir, f"{model_slug}.jpg")
             
-            # Only download if it doesn't exist yet to avoid unnecessary requests
+            # Only download if it doesn't exist yet
             if not os.path.exists(img_path):
                 # Find rows for this model that have an image_url
                 model_rows = df_raw[df_raw["model"].str.replace(" Save", "", regex=False) == model_name]
                 rows_with_images = model_rows[model_rows["image_url"].notna() & (model_rows["image_url"] != "")]
                 
                 if not rows_with_images.empty:
-                    # Pick a random row to get a more representative image (avoids bias from search sorting)
+                    # Pick a random row to get a more representative image
                     selected_row = rows_with_images.sample(n=1).iloc[0]
                     img_url = selected_row.get("image_url")
                     
@@ -150,6 +156,7 @@ def run_training_pipeline(search_path: str) -> None:
                         print(f"Downloading random image for {model_name}: {img_url}")
                         download_image(img_url, img_path)
 
+        # Push cleaned records to PostgreSQL
         _set_state(phase="loading_db", message="Loading new rows into database…")
         engine = get_engine()
         try:
@@ -168,6 +175,7 @@ def run_training_pipeline(search_path: str) -> None:
         setup_database(engine)
         load_data(engine, df=df_clean)
 
+        # Trigger model training for newly scraped vehicles
         _set_state(
             phase="training",
             message="Training new model(s) and generating charts (this may take several minutes)…",
@@ -194,9 +202,7 @@ def run_training_pipeline(search_path: str) -> None:
 
 
 def run_full_retrain() -> None:
-    """
-    Full retrain using existing DB rows (no scraping). Regenerates all charts.
-    """
+    """Run full retrain using existing database rows and regenerate all charts."""
     _set_state(
         status="running",
         phase="training",

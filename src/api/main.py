@@ -87,6 +87,7 @@ def _is_valid_cnb_url(url: str) -> bool:
 
 @app.get("/api/models")
 def get_models():
+    # Scan saved models directory to build model list
     models: List[Dict[str, Any]] = []
     if os.path.exists(MODEL_DIR):
         for f in os.listdir(MODEL_DIR):
@@ -96,6 +97,7 @@ def get_models():
                     {"id": model_id, "name": model_id.replace("_", " ").title()}
                 )
 
+    # Load performance metrics
     summary_path = os.path.join(RESULTS_DIR, "experiment_summary.json")
     summary = _load_json(summary_path)
     per_model = summary.get("per_model") or {}
@@ -127,6 +129,8 @@ def get_models():
 @app.get("/api/models/{model_id}")
 def get_model_details(model_id: str):
     safe_id = model_id.replace(" ", "_")
+    
+    # Load and filter feature importances for this model
     feature_imp_path = os.path.join(
         RESULTS_DIR, f"feature_importances_{safe_id}.csv"
     )
@@ -136,6 +140,7 @@ def get_model_details(model_id: str):
         df = df[df["Importance"] >= 0.001]
         importances = df.to_dict(orient="records")
 
+    # Locate accuracy chart
     chart_file = f"accuracy_line_{safe_id}.png"
     chart_url = (
         f"/visualizations/{chart_file}" if _viz_exists(chart_file) else None
@@ -179,12 +184,14 @@ def delete_model(model_id: str):
     safe_id = model_id.replace(" ", "_")
     safe_key = _normalize_model_key(safe_id)
 
+    # Helper function to track deleted files
     removed: List[str] = []
     def _try_remove(path: str) -> None:
         if os.path.exists(path):
             os.remove(path)
             removed.append(path)
 
+    # Clean up local assets
     _try_remove(os.path.join(MODEL_DIR, f"model_{safe_id}.joblib"))
     _try_remove(os.path.join(RESULTS_DIR, f"feature_importances_{safe_id}.csv"))
     _try_remove(os.path.join(RESULTS_DIR, f"test_predictions_{safe_id}.csv"))
@@ -196,12 +203,11 @@ def delete_model(model_id: str):
     deleted_auctions = 0
     deleted_models = 0
 
-    # Delete from PostgreSQL database to ensure a full retrain doesn't bring the model back
+    # Delete from database to prevent restoration on retrain
     try:
         engine = get_engine()
         with engine.connect() as conn:
-            # We match model by replacing spaces with underscores for safe_key matching
-            # So let's find the model_id whose normalized name matches safe_key
+            # Find matching model ID
             r = conn.execute(text("SELECT id, name FROM models")).fetchall()
             for row in r:
                 model_db_id = row[0]
@@ -268,7 +274,7 @@ def delete_model(model_id: str):
                             summary["MAPE"] = None
                             summary["R2"] = None
                             
-                        # Update the per_model keys again just to be sure we are in sync
+                        # Update per_model keys
                         pm = dict(summary.get("per_model") or {})
                         removed_keys = []
                         for k in list(pm.keys()):
@@ -281,7 +287,7 @@ def delete_model(model_id: str):
                         with open(summary_path, "w", encoding="utf-8") as f:
                             json.dump(summary, f, indent=4)
 
-                    # Sync visualizations immediately so the deleted model disappears from charts
+                    # Sync visualizations immediately
                     generate_all_visualizations()
         except Exception:
             pass
@@ -324,11 +330,14 @@ def _format_prediction_details(raw: Dict[str, Any]) -> Dict[str, Any]:
 
 @app.post("/api/predict")
 def predict_auction(req: PredictRequest):
+    # Validate input URL structure
     if not _is_valid_cnb_url(req.url):
         raise HTTPException(
             status_code=422,
             detail="Invalid URL. Use a Cars & Bids auction URL like https://carsandbids.com/auctions/...",
         )
+        
+    # Scrape raw data from the live auction page
     details = scrape_url(req.url)
     if not details or not details.get("make"):
         raise HTTPException(
@@ -336,11 +345,13 @@ def predict_auction(req: PredictRequest):
             detail="Failed to scrape details or invalid auction page.",
         )
 
+    # Standardize data to match training conditions
     df_raw = pd.DataFrame([details])
     df_raw["sale_price"] = np.nan
     df_clean = clean_dataset(df_raw, drop_rebuilt=False)
     df_clean = engineer_features(df_clean)
 
+    # Locate correct pre-trained model for this specific car
     model_name_extracted = df_clean.iloc[0]["model"]
     model_path = os.path.join(
         MODEL_DIR, f"model_{model_name_extracted.replace(' ', '_')}.joblib"
@@ -352,6 +363,7 @@ def predict_auction(req: PredictRequest):
             detail=f"No model found for '{model_name_extracted}'. Please train it first.",
         )
 
+    # Predict the final sale price
     model_to_use = joblib.load(model_path)
     X = df_clean.drop(
         columns=["sale_price", "url", "image_url", "date", "make", "model"],

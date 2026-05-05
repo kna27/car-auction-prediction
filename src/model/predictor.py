@@ -22,10 +22,8 @@ RESULTS_DIR = os.path.join("src", "model", "results")
 SUMMARY_FILE = os.path.join(RESULTS_DIR, "experiment_summary.json")
 
 def scrape_url(url: str) -> dict:
-    """
-    Scrapes an individual auction URL using headless Selenium.
-    Returns a dictionary of raw car features.
-    """
+    """Scrapes individual auction URL using headless Selenium"""
+    # Configure Chrome options for headless execution
     chrome_options = Options()
     chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
@@ -41,7 +39,9 @@ def scrape_url(url: str) -> dict:
     try:
         print(f"Scraping {url}...")
         driver.get(url)
+        
         try:
+            # Wait for auction details section to be loaded in the DOM
             WebDriverWait(driver, 20).until(
                 EC.presence_of_element_located(
                     (By.CSS_SELECTOR, "div.cnb-details-quick-facts")
@@ -50,6 +50,7 @@ def scrape_url(url: str) -> dict:
         except TimeoutException:
             print("Warning: Timed out waiting for auction details to load. Attempting to parse anyway...")
             
+        # Parse the loaded page source
         html = driver.page_source
         details = parse_auction_page(html, url)
         return details
@@ -57,10 +58,7 @@ def scrape_url(url: str) -> dict:
         driver.quit()
 
 def predict_price(url: str):
-    """
-    Predicts the final sale price of a specific live auction URL.
-    Uses the trained model corresponding to the car's model type.
-    """
+    """Predicts final sale price for live auction URL"""
     details = scrape_url(url)
     if not details or not details.get("make"):
         print("Failed to scrape details or invalid auction page.")
@@ -78,9 +76,10 @@ def predict_price(url: str):
     df_clean = clean_dataset(df_raw, drop_rebuilt=False)
     df_clean = engineer_features(df_clean)
     
+    # Determine the correct model to load based on the car's model type
     model_name_extracted = df_clean.iloc[0]['model']
-    
     model_path = os.path.join(MODEL_DIR, f"model_{model_name_extracted.replace(' ', '_')}.joblib")
+    
     if os.path.exists(model_path):
         print(f"Found Model for '{model_name_extracted}'! Loading...")
         model_to_use = joblib.load(model_path)
@@ -89,17 +88,18 @@ def predict_price(url: str):
         print(f"Please train a model for this car by running `python src/model/trainer.py`")
         return
 
-    # Prepare features to match the pipeline expectations
+    # Remove metadata features before passing to the model
     X = df_clean.drop(columns=['sale_price', 'url', 'image_url', 'date', 'make', 'model'], errors='ignore')
     
     try:
+        # Run prediction and format output
         prediction = model_to_use.predict(X)[0]
         print("\n=========================================")
-        print(f"💰 PREDICTED SALE PRICE: ${prediction:,.2f}")
+        print(f"PREDICTED SALE PRICE: ${prediction:,.2f}")
         print("=========================================")
         
         if df_clean.iloc[0]['title_status'] and "rebuilt" in str(df_clean.iloc[0]['title_status']).lower():
-            print("⚠️ NOTE: This car has a Rebuilt/Salvage title. The model was primarily trained on Clean titles, so this prediction may be an overestimate.")
+            print("This car has a Rebuilt/Salvage title. The model was primarily trained on Clean titles, so this prediction may be an overestimate.")
             
     except Exception as e:
         print(f"Error during prediction: {e}")

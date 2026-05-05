@@ -24,6 +24,7 @@ MODELS_TO_SCRAPE = [
     {"slug": "e46-m3", "path": "/search/bmw/e46-m3"},
 ]
 
+# Prevent bot detection
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:123.0) "
@@ -41,18 +42,22 @@ def parse_search_page(html: str) -> List[Dict[str, str]]:
     soup = BeautifulSoup(html, "html.parser")
     auctions: List[Dict[str, str]] = []
 
+    # Iterate over all past auction items
     for li in soup.select("ul.auctions-list.past-auctions li.auction-item"):
         text = li.get_text(" ", strip=True)
 
+        # Filter for completed auctions only
         if "Sold for" not in text and "Sold After for" not in text:
             continue
-
+        
+        # Regex to extract numeric price and date
         m_price = re.search(r"Sold(?: After)? for \$([\d,]+)", text)
         sale_price = m_price.group(1).replace(",", "") if m_price else ""
 
         m_date = re.search(r"Ended ([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})", text)
         date = m_date.group(1) if m_date else ""
 
+        # Extract auction URL
         a = li.select_one('a[href^="/auctions/"]')
         if not a or not a.has_attr("href"):
             continue
@@ -78,6 +83,7 @@ def parse_auction_page(html: str, url: str) -> Dict[str, str]:
     """
     soup = BeautifulSoup(html, "html.parser")
 
+    # div containing majority of features
     quick_facts = soup.select_one("div.cnb-details-quick-facts")
     specs: Dict[str, str] = {}
 
@@ -85,6 +91,7 @@ def parse_auction_page(html: str, url: str) -> Dict[str, str]:
         for dl in quick_facts.find_all("dl"):
             dts = dl.find_all("dt")
             dds = dl.find_all("dd")
+            # Save to dictionary
             for dt, dd in zip(dts, dds):
                 key = dt.get_text(strip=True)
                 value = dd.get_text(" ", strip=True)
@@ -94,19 +101,19 @@ def parse_auction_page(html: str, url: str) -> Dict[str, str]:
     num_modifications = 0
     modifications_section = soup.select_one("div.detail-modifications")
     if modifications_section:
-        # Usually mods are listed as <li> items within this section
+        # Mods are listed as <li> items in this section
         list_items = modifications_section.find_all("li")
         num_modifications = len(list_items)
-        # If there are no list items but there is text (e.g., "None known"), it might be 0.
+        # If there are no list items but there is text (e.g., "None known"), it's 0
         if num_modifications == 0:
             text = modifications_section.get_text(strip=True).lower()
             if "none" not in text and "stock" not in text:
-                # Fallback to count line breaks or sentences if not a list, but usually it's a list.
                 pass
 
-    # Extract year from URL slug (e.g., .../2019-mazda-mx-5-miata-club)
+    # Extract year from URL slug (../2019-mazda-mx-5-miata-club)
     year = url.split('/')[-1].split('-')[0] if url else ""
 
+    # Extract image URL
     image_url = ""
     og = soup.select_one('meta[property="og:image"]')
     if og and og.get("content"):
@@ -142,12 +149,13 @@ def scrape_model(
     progress_callback: Optional[Callable[[Dict[str, object]], None]] = None,
 ) -> List[Dict[str, str]]:
     """
-    Two phases: (1) paginate search and collect auction URLs + sale metadata,
-    (2) visit each auction page for full details. Enables accurate x/y progress.
+    First go through all search result pages and collect auction URLs + sale metadata,
+    then visit each auction page for full details.
     """
     auction_queue: List[Dict[str, str]] = []
     seen_urls: Set[str] = set()
 
+    # Scrape search result pages
     page = 1
     while True:
         if max_pages is not None and page > max_pages:
@@ -164,6 +172,7 @@ def scrape_model(
         driver.get(search_url)
 
         try:
+            # Wait for past auctions results to load
             WebDriverWait(driver, 20).until(
                 EC.presence_of_element_located(
                     (
@@ -178,6 +187,7 @@ def scrape_model(
             print("  Timed out waiting for past auction results; stopping.")
             break
 
+        # Parse search result pages
         html = driver.page_source
         page_auctions = parse_search_page(html)
         new_items = [a for a in page_auctions if a["url"] not in seen_urls]
@@ -195,6 +205,7 @@ def scrape_model(
     if progress_callback:
         progress_callback({"phase": "fetching", "fetched": 0, "total": total})
 
+    # Scrape auction pages
     all_rows: List[Dict[str, str]] = []
     for idx, meta in enumerate(auction_queue):
         print(f"  Fetching auction ({idx + 1}/{total}): {meta['url']}")
@@ -205,6 +216,7 @@ def scrape_model(
             time.sleep(3)
             driver.get(meta["url"])
             try:
+                # Wait for auction details to load
                 WebDriverWait(driver, 20).until(
                     EC.presence_of_element_located(
                         (By.CSS_SELECTOR, "div.cnb-details-quick-facts")
@@ -229,6 +241,9 @@ def scrape_model(
 
 
 def write_csv(rows: List[Dict[str, str]], output_path: str) -> None:
+    """
+    Writes the given rows to a CSV file.
+    """
     if not rows:
         return
 
