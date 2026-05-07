@@ -5,6 +5,7 @@ import matplotlib
 
 matplotlib.use("Agg")  # required for FastAPI background threads (macOS)
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import seaborn as sns
 
@@ -193,6 +194,46 @@ def plot_price_distribution_by_model():
     plt.close()
 
 
+def plot_feature_heatmap():
+    """Creates a correlation heatmap of numeric features"""
+    df = _load_predictions_df()
+    if df is None:
+        return
+
+    # Select only numeric columns for correlation
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    
+    # Exclude target and prediction columns to focus only on feature interactions
+    exclude_cols = ['Actual', 'Predicted', 'sale_price']
+    features_only = [c for c in numeric_cols if c not in exclude_cols]
+    
+    if not features_only:
+        return
+
+    corr = df[features_only].corr()
+
+    plt.figure(figsize=(12, 10))
+    sns.heatmap(
+        corr, 
+        annot=True, 
+        fmt=".2f", 
+        cmap="RdBu_r", 
+        center=0,
+        linewidths=.5,
+        cbar_kws={"shrink": .8}
+    )
+    
+    plt.title("Feature Correlation Heatmap", fontsize=16)
+    plt.tight_layout()
+
+    plt.savefig(
+        os.path.join(VIS_DIR, "feature_heatmap.png"),
+        dpi=300,
+        bbox_inches="tight",
+    )
+    plt.close()
+
+
 def plot_model_accuracy_line(model_slug: str) -> None:
     """Plots model accuracy line from per-model or aggregate predictions"""
     # Determine correct file path: use per-model CSV if available, otherwise fallback to aggregate
@@ -278,6 +319,7 @@ def generate_all_visualizations():
     plot_aggregate_actual_vs_predicted()
     plot_aggregate_residuals()
     plot_price_distribution_by_model()
+    plot_feature_heatmap()
     plot_per_model_accuracy_lines()
 
 
