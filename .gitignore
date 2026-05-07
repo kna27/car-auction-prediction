@@ -10,9 +10,9 @@ pip-log.txt
 env/
 venv/
 
-# Data
-/data/
-*.csv
+# Data - Need to commit as per course instructions
+# /data/
+# *.csv
 
 # Models
 src/model/saved_models/
