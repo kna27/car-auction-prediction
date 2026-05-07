@@ -72,8 +72,7 @@ def predict_price(url: str):
     df_raw = pd.DataFrame([details])
     df_raw['sale_price'] = np.nan # Mock target column so clean_dataset doesn't fail
     
-    # Clean it without dropping rebuilt cars
-    df_clean = clean_dataset(df_raw, drop_rebuilt=False)
+    df_clean = clean_dataset(df_raw)
     df_clean = engineer_features(df_clean)
     
     # Determine the correct model to load based on the car's model type

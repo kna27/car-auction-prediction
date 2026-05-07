@@ -348,7 +348,7 @@ def predict_auction(req: PredictRequest):
     # Standardize data to match training conditions
     df_raw = pd.DataFrame([details])
     df_raw["sale_price"] = np.nan
-    df_clean = clean_dataset(df_raw, drop_rebuilt=False)
+    df_clean = clean_dataset(df_raw)
     df_clean = engineer_features(df_clean)
 
     # Locate correct pre-trained model for this specific car

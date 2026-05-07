@@ -128,7 +128,7 @@ def run_training_pipeline(search_path: str) -> None:
         # Process and clean the scraped data
         _set_state(phase="cleaning", message="Cleaning data…", fetched=len(rows), total=len(rows))
         df_raw = pd.DataFrame(rows)
-        df_clean = clean_dataset(df_raw, drop_rebuilt=True)
+        df_clean = clean_dataset(df_raw)
         
         # Merge new records into the master dataset
         merge_into_all_vehicles_cleaned(df_clean)
